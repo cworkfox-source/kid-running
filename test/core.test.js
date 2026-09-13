@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {parseLine,parseText,validDate,validate,speed,summary,improvement,warnings,csv,validateBackup,stableStringify,backupContent,contentHash,splitUtf8Chunks,retryDelay,classifyBackupError,LOCAL_OWNER} from '../core.js';
+import {parseLine,parseText,validDate,validate,speed,summary,improvement,warnings,csv,validateBackup,stableStringify,backupContent,contentHash,splitUtf8Chunks,retryDelay,classifyBackupError,LOCAL_OWNER,duplicateGroups,dailyStatistics,chartSeries} from '../core.js';
 const now='2026-09-13';
 for(const [input,seconds] of [['30公尺 7.42秒',7.42],['30m 7.42s',7.42],['今天30公尺跑7秒42',7.42],['30米 7.42秒',7.42],['30 M 8秒5',8.5],['30公尺 8秒05',8.05],['30公尺 7秒420',7.42],['小孩今天30米跑7秒42',7.42],['30公尺跑了7.42秒',7.42],['３０ｍ ７．４２ｓ',7.42]])test(input,()=>{const r=parseLine(input,now);assert.equal(r.distance,30);assert.equal(r.seconds,seconds);assert.equal(r.date,now);});
 for(const input of ['9/13 30米 7秒42','2026/9/13 30m 7.42秒','9-13 30m 7.42s','2026-09-13 30m 7.42s'])test(input,()=>assert.equal(parseLine(input,now).date,now));
@@ -11,6 +11,25 @@ const run=(seconds,date='2026-09-13',id='a',extra={})=>({id,childId:'child_01',d
 test('速度使用未捨入值',()=>{assert.equal(speed(run(7.42)).ms.toFixed(2),'4.04');assert.equal(speed(run(7.42)).kmh.toFixed(2),'14.56');assert.equal(improvement(8.12,7.42).percent.toFixed(1),'8.6');});
 test('同距離同小孩，補登按日期排序',()=>{const s=summary([run(7.42),run(8.12,'2026-09-01','b'),run(1,now,'c',{distance:10}),run(2,now,'d',{childId:'other'})],30);assert.equal(s.first.seconds,8.12);assert.equal(s.best.seconds,7.42);assert.equal(s.latest.seconds,7.42);assert.equal(s.list.length,2);});
 test('重複與異常提示，編輯不比較自身',()=>{const r=run(8);assert.equal(warnings(r,[r]).length,0);assert.equal(warnings({...r,id:'b'},[r]).length,1);assert.ok(warnings(run(74.2,now,'d'),[run(7,now,'a'),run(8,now,'b'),run(9,now,'c')]).length);});
+test('重複掃描只分組完全相同的同一小孩資料',()=>{
+ const rows=[run(7.42,'2026-09-01','a'),run(7.42,'2026-09-01','b'),run(7.4200001,'2026-09-01','c'),run(7.42,'2026-09-01','d',{childId:'child_02'})];
+ const groups=duplicateGroups(rows,{childId:'child_01'});
+ assert.equal(groups.length,1);assert.deepEqual(groups[0].map(r=>r.id),['a','b']);
+});
+test('單日統計會依距離分組，平均速度取每次速度平均',()=>{
+ const rows=[run(6,'2026-09-10','a'),run(10,'2026-09-10','b'),run(5,'2026-09-10','c',{distance:20}),run(8,'2026-09-11','d')];
+ const result=dailyStatistics(rows,'2026-09-10',{childId:'child_01'});
+ assert.equal(result.count,3);assert.equal(result.totalDistance,80);assert.equal(result.byDistance.length,2);
+ const thirty=result.byDistance.find(group=>group.distance===30);
+ assert.equal(thirty.averageSeconds,8);assert.equal(thirty.bestSeconds,6);assert.equal(thirty.averageSpeed,4);
+});
+test('速度圖以日期範圍內同日每次速度平均，秒數保留逐筆',()=>{
+ const rows=[run(6,'2026-09-01','a'),run(10,'2026-09-01','b'),run(7.5,'2026-09-02','c'),run(8,'2026-09-03','d')];
+ const speedPoints=chartSeries(rows,{childId:'child_01',distance:30,start:'2026-09-01',end:'2026-09-02',metric:'ms'});
+ assert.deepEqual(speedPoints.map(point=>[point.date,point.value,point.count]),[['2026-09-01',4,2],['2026-09-02',4,1]]);
+ const seconds=chartSeries(rows,{childId:'child_01',distance:30,start:'2026-09-01',end:'2026-09-01'});
+ assert.deepEqual(seconds.map(point=>point.value),[6,10]);
+});
 test('CSV BOM、引號與公式注入防護',()=>{const text=csv([run(7.42,now,'a',{note:'=1+1,"test"\n下一行'})]);assert.ok(text.startsWith('\uFEFF'));assert.ok(text.includes('"\'=1+1,""test""\n下一行"'));});
 test('備份格式與關聯驗證',()=>{const data={version:1,children:[{id:'child_01',name:'小孩',birthday:null}],records:[run(7.42)]};assert.equal(validateBackup(data),data);assert.throws(()=>validateBackup({...data,version:2}));assert.throws(()=>validateBackup({...data,records:[run(7),run(8)]}));assert.throws(()=>validateBackup({...data,children:[]}));assert.throws(()=>validateBackup({...data,records:[run(7,now,'a',{timingMethod:'invalid'})]}));});
 test('穩定序列化與內容雜湊忽略鍵序',async()=>{

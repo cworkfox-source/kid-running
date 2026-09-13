@@ -23,6 +23,32 @@ export const speed=r=>({ms:r.distance/r.seconds,kmh:r.distance/r.seconds*3.6});
 export const improvement=(before,after)=>({seconds:before-after,percent:(before-after)/before*100});
 export function summary(records,distance,childId='child_01'){const list=chronological(records.filter(r=>r.distance===distance&&r.childId===childId));if(!list.length)return null;const first=list[0],latest=list.at(-1),previous=list.at(-2),best=list.reduce((a,b)=>a.seconds<=b.seconds?a:b);return {list,first,latest,previous,best,total:improvement(first.seconds,latest.seconds)};}
 export function warnings(record,records){const group=records.filter(r=>sameGroup(r,record)&&r.id!==record.id);const messages=[];if(group.some(r=>duplicate(r,record)))messages.push('這筆資料可能已經存在，仍然新增嗎？');if(group.length>=3){const values=group.map(r=>r.seconds).sort((a,b)=>a-b),median=values[Math.floor(values.length/2)];if(record.seconds>median*2||record.seconds<median/2)messages.push(`這筆 ${record.seconds} 秒明顯偏離平常約 ${median} 秒，請確認小數點與測試條件。`);}return messages;}
+export function duplicateGroups(records,{childId}={}){
+ const buckets=new Map();
+ for(const r of records){if(childId&&r.childId!==childId)continue;const key=[r.childId,r.date,r.distance,r.seconds].join('\u0000');const list=buckets.get(key)||[];list.push(r);buckets.set(key,list);}
+ return [...buckets.values()].filter(list=>list.length>1).map(list=>chronological(list)).sort((a,b)=>a[0].date.localeCompare(b[0].date)||a[0].distance-b[0].distance||a[0].seconds-b[0].seconds);
+}
+export function recordsInRange(records,{childId,distance,start='',end='' }={}){
+ return chronological(records.filter(r=>(!childId||r.childId===childId)&&(distance===undefined||distance===null||r.distance===distance)&&(!start||r.date>=start)&&(!end||r.date<=end)));
+}
+export function dailyStatistics(records,date,{childId}={}){
+ const list=recordsInRange(records,{childId,start:date,end:date});
+ const byDistance=[...new Set(list.map(r=>r.distance))].sort((a,b)=>a-b).map(distance=>{
+  const group=list.filter(r=>r.distance===distance),speeds=group.map(r=>speed(r).ms),seconds=group.map(r=>r.seconds);
+  return {distance,records:group,count:group.length,averageSeconds:seconds.reduce((a,b)=>a+b,0)/group.length,bestSeconds:Math.min(...seconds),slowestSeconds:Math.max(...seconds),averageSpeed:speeds.reduce((a,b)=>a+b,0)/group.length};
+ });
+ return {date,records:list,count:list.length,totalDistance:list.reduce((sum,r)=>sum+r.distance,0),totalSeconds:list.reduce((sum,r)=>sum+r.seconds,0),byDistance};
+}
+export function chartSeries(records,{childId,distance,start='',end='',metric='seconds'}={}){
+ const list=recordsInRange(records,{childId,distance,start,end});
+ if(metric==='seconds')return list.map(r=>({date:r.date,value:r.seconds,count:1,bestSeconds:r.seconds,record:r}));
+ const days=new Map();
+ for(const r of list){const group=days.get(r.date)||[];group.push(r);days.set(r.date,group);}
+ return [...days.entries()].sort(([a],[b])=>a.localeCompare(b)).map(([date,group])=>{
+  const averageSpeed=group.reduce((sum,r)=>sum+speed(r).ms,0)/group.length;
+  return {date,value:metric==='kmh'?averageSpeed*3.6:averageSpeed,count:group.length,bestSeconds:Math.min(...group.map(r=>r.seconds)),records:group};
+ });
+}
 export function csv(records){const cell=v=>{let s=String(v??'');if(/^[=+\-@\t\r]/.test(s))s="'"+s;return '"'+s.replaceAll('"','""')+'"';};return '\uFEFF'+[['日期','距離公尺','秒數','速度m/s','時速km/h','備註'],...chronological(records).map(r=>[r.date,r.distance,r.seconds,speed(r).ms.toFixed(2),speed(r).kmh.toFixed(2),r.note])].map(row=>row.map(cell).join(',')).join('\r\n');}
 export function validateBackup(data){if(data?.version!==1||!Array.isArray(data.children)||!Array.isArray(data.records))throw Error('不是支援的版本 1 備份檔');const children=new Set();for(const c of data.children){if(typeof c.id!=='string'||!c.id||children.has(c.id)||typeof c.name!=='string'||!c.name.trim()||(c.birthday!==null&&!validDate(c.birthday)))throw Error('小孩資料無效');children.add(c.id);}const ids=new Set();for(const r of data.records){validate(r);if(!children.has(r.childId)||typeof r.id!=='string'||!r.id||ids.has(r.id)||!Number.isFinite(Date.parse(r.createdAt))||!Number.isFinite(Date.parse(r.updatedAt)))throw Error('紀錄 ID、時間或小孩關聯無效');for(const [field,allowed] of Object.entries({startType:['','standing','flying','free'],surface:['','indoor','track','asphalt','grass'],timingMethod:['','manual','video','electronic']})){if(!allowed.includes(r[field]??''))throw Error('測試條件無效');}ids.add(r.id);}return data;}
 

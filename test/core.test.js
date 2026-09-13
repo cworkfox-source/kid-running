@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {parseLine,parseText,validDate,validate,speed,summary,improvement,warnings,csv,validateBackup} from '../core.js';
+import {parseLine,parseText,validDate,validate,speed,summary,improvement,warnings,csv,validateBackup,backupPayload,backupFilename} from '../core.js';
 const now='2026-09-13';
 for(const [input,seconds] of [['30公尺 7.42秒',7.42],['30m 7.42s',7.42],['今天30公尺跑7秒42',7.42],['30米 7.42秒',7.42],['30 M 8秒5',8.5],['30公尺 8秒05',8.05],['30公尺 7秒420',7.42],['小孩今天30米跑7秒42',7.42],['30公尺跑了7.42秒',7.42],['３０ｍ ７．４２ｓ',7.42]])test(input,()=>{const r=parseLine(input,now);assert.equal(r.distance,30);assert.equal(r.seconds,seconds);assert.equal(r.date,now);});
 for(const input of ['9/13 30米 7秒42','2026/9/13 30m 7.42秒','9-13 30m 7.42s','2026-09-13 30m 7.42s'])test(input,()=>assert.equal(parseLine(input,now).date,now));
@@ -13,3 +13,4 @@ test('同距離同小孩，補登按日期排序',()=>{const s=summary([run(7.42
 test('重複與異常提示，編輯不比較自身',()=>{const r=run(8);assert.equal(warnings(r,[r]).length,0);assert.equal(warnings({...r,id:'b'},[r]).length,1);assert.ok(warnings(run(74.2,now,'d'),[run(7,now,'a'),run(8,now,'b'),run(9,now,'c')]).length);});
 test('CSV BOM、引號與公式注入防護',()=>{const text=csv([run(7.42,now,'a',{note:'=1+1,"test"\n下一行'})]);assert.ok(text.startsWith('\uFEFF'));assert.ok(text.includes('"\'=1+1,""test""\n下一行"'));});
 test('備份格式與關聯驗證',()=>{const data={version:1,children:[{id:'child_01',name:'小孩',birthday:null}],records:[run(7.42)]};assert.equal(validateBackup(data),data);assert.throws(()=>validateBackup({...data,version:2}));assert.throws(()=>validateBackup({...data,records:[run(7),run(8)]}));assert.throws(()=>validateBackup({...data,children:[]}));assert.throws(()=>validateBackup({...data,records:[run(7,now,'a',{timingMethod:'invalid'})]}));});
+test('備份 JSON 形狀與檔名',()=>{const data=backupPayload([{id:'child_01',name:'小孩',birthday:null}],[run(7.42)],[{id:'distance',value:30}],'2026-09-13T00:00:00.000Z');assert.deepEqual(data,{version:1,exportedAt:'2026-09-13T00:00:00.000Z',children:[{id:'child_01',name:'小孩',birthday:null}],records:[run(7.42)],settings:[{id:'distance',value:30}]});assert.equal(backupFilename('2026-09-13'),'run-data-2026-09-13.json');});

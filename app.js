@@ -4,13 +4,15 @@ import {createAuthService,persistenceUnavailableMessage,shouldCompleteBackupEnab
 import {loadFirebaseModules,resolveFirebaseConfig,initFirebase,loadLocalFirebaseConfig} from './firebase.js';
 import {createFirestoreCloud} from './cloud.js';
 import {createBackupService,describeBackupStatus} from './backup.js';
-import {listRestorableVersions,restoreVersion,restorePreview} from './restore.js';
+import {restoreVersion,restorePreview,queryRestorableVersions,restoreListCopy} from './restore.js';
+import {exportFile,exportOutcomeMessage,INERT_DOWNLOAD_HINT} from './export.js';
 const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const icons={home:'⌂',records:'☷',analysis:'↗',settings:'⚙'};
 let records=[],children=[],settings=[],page='home',distance=30,filter='all',preview=[],backup=null,editing=null,busy=false,pasteDraft='',duplicateScanOpen=false;
 let analysisStart='',analysisEnd='',analysisDay=today(),analysisMetric='seconds';
 let draft={date:today(),distance:30,seconds:'',note:'',startType:'',surface:'',timingMethod:''};
 let appMeta=null,accountState=null,authUser=null,authInfo={ready:false,resolving:true,configured:false,available:false,persistence:{ok:true,longLived:true}},cloud=null,backupService=null,authService=null,tabId='tab',versions=[],restoreOffer=null,online=typeof navigator==='undefined'?true:navigator.onLine!==false,statusExtra={};
+let versionsQuery={status:'idle',versions:[],error:null},versionsUid=null,versionsLoading=false,selectedRestore=null,exportFallback=null,lastSuccessKey='';
 const ownerId=()=>authUser?.uid||LOCAL_OWNER;
 const scopedChildren=()=>children.filter(c=>sameOwner(c,ownerId()));
 const scopedRecords=()=>records.filter(r=>sameOwner(r,ownerId()));
@@ -67,10 +69,32 @@ function recordPage(){let list=chronological(own().filter(r=>filter==='all'||r.d
 function chart(points,metric){if(!points.length)return empty('這個範圍沒有資料','調整日期或距離後再試。');const values=points.map(p=>p.value),min=Math.min(...values),max=Math.max(...values),pad=Math.max((max-min)*.15,.1),low=Math.max(0,min-pad),high=max+pad,reverse=metric==='seconds'&&reverseOn(),times=points.map(p=>Date.parse(p.date+'T12:00:00Z')),tmin=Math.min(...times),tmax=Math.max(...times),label=metric==='seconds'?'秒數':metric==='ms'?'平均速度 m/s':'平均時速 km/h',aria=metric==='seconds'?`${distance} 公尺秒數趨勢圖，${reverse?'秒數越低位置越高':'秒數越低位置越低'}`:`${distance} 公尺${label}趨勢圖`,x=i=>50+(tmax===tmin?(points.length===1?.5:i/(points.length-1)):(times[i]-tmin)/(tmax-tmin))*550,y=v=>30+(reverse?(v-low)/(high-low):(high-v)/(high-low))*210;return `<div class="chart-wrap"><svg viewBox="0 0 640 300" role="img" aria-label="${aria}">${Array.from({length:5},(_,i)=>{const v=low+(high-low)*i/4;return `<line x1="50" x2="610" y1="${y(v)}" y2="${y(v)}" stroke="#e6eae9" stroke-dasharray="4 4"/><text x="40" y="${y(v)+4}" text-anchor="end">${v.toFixed(2)}</text>`;}).join('')}<polyline points="${points.map((p,i)=>`${x(i)},${y(p.value)}`).join(' ')}" fill="none" stroke="#188870" stroke-width="3" stroke-linejoin="round"/>${points.map((p,i)=>`<circle cx="${x(i)}" cy="${y(p.value)}" r="5" fill="#188870" stroke="white" stroke-width="2"><title>${p.date}：${f(p.value)} ${metric==='seconds'?'秒':metric==='ms'?'m/s':'km/h'}${p.count>1?`（${p.count} 次平均）`:''}</title></circle>${i===0||i===points.length-1||points.length<=6?`<text x="${x(i)}" y="270" text-anchor="middle">${short(p.date)}</text>`:''}`).join('')}</svg></div><details><summary>查看圖表數據</summary><table><thead><tr><th>日期</th><th>${label}</th><th>次數</th><th>當日最佳</th></tr></thead><tbody>${points.map(p=>`<tr><td>${p.date}</td><td>${f(p.value)} ${metric==='seconds'?'秒':metric==='ms'?'m/s':'km/h'}</td><td>${p.count}</td><td>${f(p.bestSeconds)} 秒</td></tr>`).join('')}</tbody></table></details>`;}
 function dayStatistics(){const result=dailyStatistics(scopedRecords(),analysisDay,{childId:active()?.id});return `<section class="card"><div class="section-head"><h2>單日統計</h2><label class="filter-label">日期 <input id="analysis-day" type="date" value="${analysisDay}"></label></div>${!result.count?'<p class="muted">這一天尚無紀錄。</p>':`<div class="day-total"><strong>${result.count}</strong><span>次測試</span><span>總距離 ${f(result.totalDistance)}m</span><span>總測試時間 ${f(result.totalSeconds)} 秒</span></div><table><thead><tr><th>距離</th><th>次數</th><th>平均秒數</th><th>最佳秒數</th><th>平均速度</th></tr></thead><tbody>${result.byDistance.map(g=>`<tr><td>${g.distance}m</td><td>${g.count}</td><td>${f(g.averageSeconds)} 秒</td><td>${f(g.bestSeconds)} 秒</td><td>${f(g.averageSpeed)} m/s<br><small>${f(g.averageSpeed*3.6)} km/h</small></td></tr>`).join('')}</tbody></table><p class="quiet">平均速度為該日每次速度的平均，不以平均秒數反推。</p>`}</section>`;}
 function analysis(){const s=stat(),points=chartSeries(scopedRecords(),{childId:active()?.id,distance:Number(distance),start:analysisStart,end:analysisEnd,metric:analysisMetric}),label=analysisMetric==='seconds'?'秒數':analysisMetric==='ms'?'每日平均速度':'每日平均時速';return `<section class="card"><div class="section-head"><h2>成績趨勢</h2>${distanceSelect()}</div><div class="analysis-filters"><label>開始日期<input id="analysis-start" type="date" value="${analysisStart}"></label><label>結束日期<input id="analysis-end" type="date" value="${analysisEnd}"></label><label>顯示<select id="analysis-metric">${options([['seconds','秒數'],['ms','平均速度 m/s'],['kmh','平均時速 km/h']],analysisMetric)}</select></label></div><p class="muted">${analysisMetric==='seconds'?'逐筆顯示；秒數越低越好。':'同一距離以每天各次速度的平均值呈現；沒有測試的日期不補 0。'}</p>${analysisMetric==='seconds'?`<label class="checkbox"><input id="reverse" type="checkbox" ${reverseOn()?'checked':''}>反轉 Y 軸，讓進步向上</label>`:''}${chart(points,analysisMetric)}</section>${dayStatistics()}${s?`<section class="card analysis-summary"><h2>${distance} 公尺 · 進步摘要</h2>${summaryHTML(s)}</section>`:''}<section class="card"><h2>個人最佳紀錄</h2>${own().length?`<div class="pb-grid">${[...new Set(own().map(r=>r.distance))].sort((a,b)=>a-b).map(d=>{const b=summary(scopedRecords(),d,active().id).best;return `<div><span>${d} 公尺</span><strong>${f(b.seconds)}<small> 秒</small></strong><span>${b.date}</span></div>`;}).join('')}</div>`:'<p class="muted">第一筆成績會成為你的起始紀錄。</p>'}<p class="quiet">手動計時、場地與起跑方式都可能影響成績，建議在相近條件下觀察趨勢。</p></section>`;}
-function versionListHTML(){
- if(!authUser||!accountState?.backupEnabled)return '<p class="quiet">啟用備份後，這裡會列出可還原的成功版本。</p>';
- if(!versions.length)return '<p class="quiet">還沒有可還原的成功版本。未完成的上傳不會出現在這裡。</p>';
- return `<ul class="version-list">${versions.map((v,i)=>`<li><div><strong>${esc(v.deviceLabel||v.deviceId)}</strong><p>${esc(v.completedLabel||'')} · ${v.recordCount} 筆${i===0?' · 最近完成':''}</p></div><button class="secondary" data-restore="${esc(v.backupId)}" data-device="${esc(v.deviceId)}">預覽還原</button></li>`).join('')}</ul>`;
+function restoreStatusCode(){
+ if(versionsLoading)return 'loading';
+ if(versionsQuery.status&&versionsQuery.status!=='idle')return versionsQuery.status;
+ if(!authUser)return 'signed-out';
+ if(!cloud)return 'unavailable';
+ return 'idle';
+}
+function restorePanelHTML(){
+ const status=restoreStatusCode();
+ const shown=versionsQuery.versions||versions;
+ const copy=restoreListCopy(status,shown);
+ const retryLabel=status==='loading'?'查詢中…':status==='ready'||status==='empty'?'重新整理':status==='signed-out'||status==='idle'?'查詢雲端版本':'再試一次';
+ const canQuery=Boolean(authUser);
+ const hideList=['signed-out','unavailable','empty'].includes(status);
+ const list=hideList?[]:shown;
+ const listHTML=Array.isArray(list)&&list.length?`<ul class="version-list">${list.map((v,i)=>`<li><div><strong>${esc(v.deviceLabel||v.deviceId)}</strong><p>${esc(v.completedLabel||'時間未知')} · 雲端 ${v.recordCount??0} 筆${i===0?' · 最近完成':''}</p></div><button class="secondary" data-restore="${esc(v.backupId)}" data-device="${esc(v.deviceId)}">預覽還原</button></li>`).join('')}</ul>`:'';
+ const preview=selectedRestore?restorePreview(selectedRestore,scopedRecords().length):null;
+ const previewHTML=preview?`<div class="notice restore-preview-card" id="restore-preview-card"><strong>${esc(preview.title)}</strong><p>備份時間：${esc(preview.completedLabel)}</p><p>來源裝置：${esc(preview.deviceLabel)}</p><p>雲端 ${preview.recordCount??0} 筆紀錄 · 將取代本機 ${preview.localRecordCount} 筆</p><p class="quiet">${esc(preview.replaceScope)}</p><div class="banner-actions"><button class="primary" id="confirm-restore" type="button">確認取代並還原</button><button class="secondary" id="cancel-restore-preview" type="button">取消</button></div></div>`:'';
+ return `<div class="settings-row" id="firebase-restore-entry"><div><strong>從 Firebase 還原</strong><p>查詢這個 Google 帳號的成功版本；不必先開啟本機自動備份。</p></div><button class="secondary" id="refresh-restore-versions" ${canQuery&&!versionsLoading?'':'disabled'}>${esc(retryLabel)}</button></div>
+<p class="restore-status ${esc(status)}" id="restore-list-status" data-state="${esc(status)}">${esc(copy)}</p>
+${listHTML}${previewHTML}<div id="restore-preview"></div>`;
+}
+function exportFallbackHTML(){
+ if(!exportFallback)return '';
+ if(!exportFallback.expanded)return `<p class="quiet" id="export-fallback-prompt">沒看到檔案？<button class="text-button" id="show-export-fallback" type="button">顯示內容／複製內容</button></p>`;
+ return `<div class="notice export-fallback" id="export-fallback"><strong>顯示內容／複製內容</strong><p>檔案「${esc(exportFallback.filename)}」已準備好。若沒有出現分享或下載，請複製後自行存檔。</p><p class="quiet">${esc(INERT_DOWNLOAD_HINT)}</p><textarea id="export-fallback-text" readonly rows="8">${esc(exportFallback.content)}</textarea><div class="banner-actions"><button class="secondary" id="copy-export-content" type="button">複製內容</button><button class="text-button" id="dismiss-export-fallback" type="button">關閉</button></div></div>`;
 }
 function settingPage(){
  const s=statusView();
@@ -83,12 +107,12 @@ function settingPage(){
 <div class="settings-row"><div><strong>立即備份</strong><p>略過等待，把目前本機快照上傳</p></div><button class="secondary" id="backup-now" ${authUser&&accountState?.backupEnabled?'':'disabled'}>立即備份</button></div>
 <div class="settings-row"><div><strong>暫停自動備份</strong><p>仍會追蹤變更，恢復後補傳最新快照</p></div><label class="checkbox"><input id="pause-backup" type="checkbox" ${accountState?.backupPaused?'checked':''} ${authUser&&accountState?.backupEnabled?'':'disabled'}>暫停</label></div>
 <div class="settings-row"><div><strong>登出</strong><p>畫面會離開這個帳號的資料；未完成的備份佇列會保留到下次回來</p></div><button class="secondary" id="sign-out" ${authUser?'':'disabled'}>登出</button></div>
-<h3>可還原版本</h3>${versionListHTML()}<div id="restore-preview"></div>
+<h3>從 Firebase 還原</h3>${restorePanelHTML()}
 <p class="quiet">狀態：${esc(s.text)}。成功才會顯示「已備份」；連線恢復只會檢查佇列，不會直接宣告成功。</p></section>
-<section class="card"><h2>本機 JSON／CSV</h2><div class="notice">資料仍以這台裝置的 IndexedDB 為日常來源。清除網站資料或更換手機前，建議再匯出一份 JSON。</div><div class="settings-row"><div><strong>JSON 完整備份</strong><p>保留目前帳號的紀錄、小孩與必要偏好</p></div><button class="secondary" id="export-json">匯出 JSON</button></div><div class="settings-row"><div><strong>CSV 成績表</strong><p>供 Excel、Google Sheets 或分析使用</p></div><button class="secondary" id="export-csv">匯出 CSV</button></div><div class="settings-row"><div><strong>還原 JSON 備份</strong><p>先檢查內容，再確認取代目前帳號的本機資料</p></div><label class="secondary file-label">選擇檔案<input id="import-json" type="file" accept=".json,application/json"></label></div><div id="backup-preview"></div><p class="quiet">目前這個帳號共 ${scopedRecords().length} 筆紀錄。${settings.find(s=>s.id==='lastBackup')?`上次匯出：${esc(new Date(settings.find(s=>s.id==='lastBackup').value).toLocaleString('zh-TW'))}`:'尚未匯出備份。'}</p></section>
+<section class="card"><h2>本機 JSON／CSV</h2><div class="notice">資料仍以這台裝置的 IndexedDB 為日常來源。清除網站資料或更換手機前，建議再匯出一份 JSON。</div>${exportFallbackHTML()}<div class="settings-row"><div><strong>JSON 完整備份</strong><p>保留目前帳號的紀錄、小孩與必要偏好</p></div><button class="secondary" id="export-json">匯出 JSON</button></div><div class="settings-row"><div><strong>CSV 成績表</strong><p>供 Excel、Google Sheets 或分析使用</p></div><button class="secondary" id="export-csv">匯出 CSV</button></div><div class="settings-row"><div><strong>還原 JSON 備份</strong><p>先檢查內容，再確認取代目前帳號的本機資料</p></div><label class="secondary file-label">選擇檔案<input id="import-json" type="file" accept=".json,application/json"></label></div><div id="backup-preview"></div><p class="quiet">目前這個帳號共 ${scopedRecords().length} 筆紀錄。${settings.find(s=>s.id==='lastBackup')?`上次匯出：${esc(new Date(settings.find(s=>s.id==='lastBackup').value).toLocaleString('zh-TW'))}`:'尚未匯出備份。'}</p></section>
 <section class="card"><h2>關於小步快跑</h2><p class="muted">快速記錄、文字解析與分析都在你的裝置完成。雲端備份是選用的版本保險，不是即時雙向同步。</p><p class="quiet">首次開啟需要網路；載入完成後會準備離線快取。Firebase SDK 若暫時失敗，本機仍可記錄。新增時保留原始秒數，畫面顯示四捨五入至小數點後兩位。</p></section>`;}
 function capture(){for(const k of ['date','distance','seconds','note','startType','surface','timingMethod'])if($('#'+k))draft[k]=$('#'+k).value;}
-function changePage(p){if(page==='home')capture();page=p;history.replaceState(null,'','#'+p);if(p==='settings')loadVersions().finally(render);else render();window.scrollTo(0,0);}
+function changePage(p){if(page==='home')capture();page=p;history.replaceState(null,'','#'+p);if(p==='settings'){if(authUser&&!['ready','empty','offline','permission','reauth','error'].includes(versionsQuery.status))versionsQuery={...versionsQuery,status:'loading'};render();loadVersions().finally(render);}else render();window.scrollTo(0,0);}
 async function refresh(){[records,children,settings]=await Promise.all([all('records'),all('children'),all('settings')]);appMeta=await ensureAppMeta();accountState=await getAccount(ownerId());}
 async function ensureChild(){if(active())return;await write([{store:'children',value:{id:defaultChildId(ownerId()),name:'小孩',birthday:null,ownerUid:ownerId()}}]);await refresh();}
 async function safe(fn){if(busy)return;busy=true;try{await fn();}catch(e){toast(`未完成：${e.message}。資料未成功儲存時請勿關閉頁面。`);}finally{busy=false;}}
@@ -96,8 +120,41 @@ function makeRecord(r,index=0){const time=new Date(Date.now()+index).toISOString
 async function writeLocal(changes){await write(changes.map(c=>c.value&&(c.store==='records'||c.store==='children')?{...c,value:{...c.value,ownerUid:ownerId()}}:c),{bumpRevision:true,ownerUid:ownerId()});if(backupService&&authUser&&accountState?.backupEnabled)backupService.noteLocalChange(ownerId());}
 async function saveRecords(incoming){const candidate=[...records];for(const r of incoming){validate(r);const notes=warnings(r,candidate);if(notes.length&&!confirm(notes.join('\n')+'\n\n確認保留原數值並繼續？'))return false;candidate.push(r);}await writeLocal(incoming.map(value=>({store:'records',value})));await refresh();return true;}
 async function setSetting(id,value){if(id==='reverse'){await writeLocal([{store:'settings',value:{id:`reverse:${ownerId()}`,value,ownerUid:ownerId()}}]);settings=await all('settings');return;}await write([{store:'settings',value:{id,value}}]);settings=await all('settings');}
-function download(name,content,type){const url=URL.createObjectURL(new Blob([content],{type})),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),30000);}
-async function loadVersions(){versions=[];if(!cloud||!authUser)return;try{versions=await listRestorableVersions(cloud,authUser.uid);}catch{versions=[];}}
+function clearRestoreList(){versions=[];versionsQuery={status:authUser?'loading':'signed-out',versions:[],error:null};versionsUid=authUser?.uid||null;selectedRestore=null;}
+async function loadVersions(){
+ const uid=authUser?.uid||null;
+ if(uid!==versionsUid){
+  versions=[];
+  selectedRestore=null;
+  versionsQuery={status:uid?'loading':'signed-out',versions:[],error:null};
+  versionsUid=uid;
+ }
+ if(!uid){versionsQuery={status:'signed-out',versions:[],error:null};versions=[];return;}
+ if(!cloud){versionsQuery={status:'unavailable',versions:[],error:null};return;}
+ versionsLoading=true;
+ versionsQuery={status:'loading',versions,error:null};
+ const statusEl=$('#restore-list-status');
+ if(statusEl){statusEl.textContent=restoreListCopy('loading',versions);statusEl.dataset.state='loading';statusEl.className='restore-status loading';}
+ const btn=$('#refresh-restore-versions');
+ if(btn){btn.disabled=true;btn.textContent='查詢中…';}
+ try{
+  const result=await queryRestorableVersions(cloud,uid,{online,previous:versions});
+  if(authUser?.uid!==uid)return;
+  versionsQuery=result;
+  versions=result.versions||[];
+  versionsUid=uid;
+ }finally{versionsLoading=false;}
+}
+async function exportCurrentFile(filename,content,mimeType,{remember=false}={}){
+ const result=await exportFile({filename,content,mimeType});
+ if(result.method==='share-canceled')return result;
+ const outcome=exportOutcomeMessage(result);
+ if(outcome.showFallback||result.method==='content-fallback')exportFallback={filename:result.filename,content:result.content,expanded:result.method==='content-fallback'};
+ if(remember)await setSetting('lastBackup',new Date().toISOString());
+ if(page==='settings')render();
+ if(outcome.toast)toast(outcome.toast);
+ return result;
+}
 async function handleEnable(){
  if(!authInfo.configured){toast('尚未設定 Firebase Web 設定，無法登入。本機仍可記錄。');return;}
  if(authInfo.configured&&!authInfo.available){toast(authInfo.loadError?.message||'雲端元件暫時無法使用，本機仍可記錄。');return;}
@@ -167,36 +224,47 @@ async function handleSignOut(){
  backupService?.cancelUploads();
  await authService.signOut();
  clearEnableIntents();
- authUser=null;restoreOffer=null;versions=[];
+ authUser=null;restoreOffer=null;lastSuccessKey='';
+ clearRestoreList();
  await refresh();await ensureChild();render();
  toast('已登出。本機快速記錄仍可繼續使用。');
 }
 async function handleRestore(version){
  if(!version||!authUser)return;
  const preview=restorePreview(version,scopedRecords().length);
- if(!confirm(`${preview.title}\n${version.recordCount} 筆紀錄\n${preview.replaceScope}\n\n確定取代？`))return;
+ if(!confirm(`${preview.title}\n來源裝置：${preview.deviceLabel}\n備份時間：${preview.completedLabel}\n雲端 ${preview.recordCount??0} 筆紀錄，將取代本機 ${preview.localRecordCount} 筆\n${preview.replaceScope}\n\n確定取代？`))return;
  const pending=accountState?.pendingBackup||(await all('backupQueue')).some(item=>item.uid===authUser.uid&&item.status!=='complete');
  if(pending){
   const flushed=await backupService.flush(authUser.uid);
   if(!flushed.ok&&!flushed.unchanged&&!flushed.waitingFirst){
    if(!confirm('尚有未備份變更且上傳未成功。按確定會先匯出 JSON，再繼續還原。'))return;
-   download(`run-data-${today()}.json`,JSON.stringify(jsonExportPayload({children,records,settings},ownerId()),null,2),'application/json');
-   if(!confirm('請確認 JSON 已下載。仍要用雲端版本取代本機資料嗎？'))return;
+   const exported=await exportCurrentFile(`run-data-${today()}.json`,JSON.stringify(jsonExportPayload({children,records,settings},ownerId()),null,2),'application/json',{remember:true});
+   if(exported.method==='share-canceled')return;
+   if(!confirm('請確認 JSON 已保存。仍要用雲端版本取代本機資料嗎？'))return;
   }
  }
- await restoreVersion({db:{all,write,getAccount,putAccount,saveRestoreSnapshot},cloud,uid:authUser.uid,version});
- await refresh();await ensureChild();restoreOffer=null;render();
+ try{
+  await restoreVersion({db:{all,write,getAccount,putAccount,saveRestoreSnapshot},cloud,uid:authUser.uid,version});
+ }catch(error){
+  await refresh();
+  toast(`還原未完成：${error.message||error}。本機資料未被刪除。`);
+  return;
+ }
+ await refresh();await ensureChild();restoreOffer=null;selectedRestore=null;render();
  toast('已用選擇的雲端版本取代本機資料。其他裝置的新版本未被覆寫。');
 }
 function bindBackupUi(){
  $('#enable-backup')?.addEventListener('click',()=>safe(handleEnable));
  $('#dismiss-backup')?.addEventListener('click',()=>safe(async()=>{appMeta={...appMeta,enablePromptDismissed:true};await write([{store:'meta',value:appMeta}]);render();}));
- $('#backup-now')?.addEventListener('click',()=>safe(async()=>{if(!authUser)return;const result=await backupService.flush(authUser.uid);await refresh();render();toast(result.ok||result.unchanged||result.waitingFirst?'已送出備份（成功才會顯示已備份）':'備份尚未完成，本機資料仍在');}));
- $('#pause-backup')?.addEventListener('change',e=>safe(async()=>{if(!authUser)return;const acc=await getAccount(authUser.uid);await putAccount({...acc,backupPaused:e.target.checked});if(!e.target.checked)await backupService.flush(authUser.uid,{ignorePause:true});await refresh();render();}));
+ $('#backup-now')?.addEventListener('click',()=>safe(async()=>{if(!authUser)return;const result=await backupService.flush(authUser.uid);await refresh();await loadVersions();render();toast(result.ok||result.unchanged||result.waitingFirst?'已送出備份（成功才會顯示已備份）':'備份尚未完成，本機資料仍在');}));
+ $('#pause-backup')?.addEventListener('change',e=>safe(async()=>{if(!authUser)return;const acc=await getAccount(authUser.uid);await putAccount({...acc,backupPaused:e.target.checked});if(!e.target.checked)await backupService.flush(authUser.uid,{ignorePause:true});await refresh();await loadVersions();render();}));
  $('#sign-out')?.addEventListener('click',()=>safe(handleSignOut));
- $('#offer-restore')?.addEventListener('click',()=>safe(async()=>{if(!restoreOffer?.versions?.[0])return;await handleRestore(restoreOffer.versions[0]);}));
+ $('#offer-restore')?.addEventListener('click',()=>safe(async()=>{if(!restoreOffer?.versions?.[0])return;selectedRestore=restoreOffer.versions[0];page='settings';history.replaceState(null,'','#settings');render();await loadVersions();render();$('#restore-preview-card')?.scrollIntoView({block:'nearest'});}));
  $('#keep-local')?.addEventListener('click',()=>{restoreOffer=null;render();});
- document.querySelectorAll('[data-restore]').forEach(btn=>btn.onclick=()=>safe(async()=>{const version=versions.find(v=>v.backupId===btn.dataset.restore&&v.deviceId===btn.dataset.device);await handleRestore(version);}));
+ $('#refresh-restore-versions')?.addEventListener('click',()=>safe(async()=>{await loadVersions();render();}));
+ $('#confirm-restore')?.addEventListener('click',()=>safe(async()=>{if(!selectedRestore)return;await handleRestore(selectedRestore);}));
+ $('#cancel-restore-preview')?.addEventListener('click',()=>{selectedRestore=null;render();});
+ document.querySelectorAll('[data-restore]').forEach(btn=>btn.onclick=()=>{selectedRestore=versions.find(v=>v.backupId===btn.dataset.restore&&v.deviceId===btn.dataset.device)||null;render();$('#restore-preview-card')?.scrollIntoView({block:'nearest'});});
 }
 function bind(){document.querySelectorAll('[data-page]').forEach(b=>b.onclick=()=>changePage(b.dataset.page));$('.brand').onclick=e=>{e.preventDefault();changePage('home');};
  if($('#run-form')){$('#run-form').oninput=capture;$('#custom').onclick=()=>{$('#distance').focus();$('#distance').select();};document.querySelectorAll('[data-distance]').forEach(b=>b.onclick=()=>{capture();draft.distance=Number(b.dataset.distance);distance=draft.distance;render();$('#seconds').focus();});$('#cancel-edit')?.addEventListener('click',()=>{editing=null;draft={...draft,date:today(),seconds:'',note:'',startType:'',surface:'',timingMethod:''};render();});$('#run-form').onsubmit=e=>{e.preventDefault();safe(async()=>{capture();const r=validate({...draft,distance:Number(draft.distance),seconds:Number(draft.seconds)});const previousBest=summary(records,r.distance,active().id)?.best;let message;
@@ -215,13 +283,18 @@ function bind(){document.querySelectorAll('[data-page]').forEach(b=>b.onclick=()
  $('#delete-duplicates')?.addEventListener('click',()=>safe(async()=>{const ids=selectedDuplicateIds();if(!ids.length)return;const currentIds=new Set(scopedRecords().map(record=>record.id));if(ids.some(id=>!currentIds.has(id))){duplicateScanOpen=false;render();toast('資料已變動，請重新掃描。');return;}if(!confirm(`刪除所選 ${ids.length} 筆紀錄？\n這會更新統計與雲端備份。`))return;await writeLocal(ids.map(id=>({store:'records',delete:id})));await refresh();duplicateScanOpen=true;render();toast(`已刪除 ${ids.length} 筆重複紀錄。`);}));
  $('#reverse')?.addEventListener('change',e=>safe(async()=>{await setSetting('reverse',e.target.checked);render();}));
  document.querySelectorAll('[data-edit],[data-copy]').forEach(b=>b.onclick=()=>{const r=records.find(x=>x.id===(b.dataset.edit||b.dataset.copy));editing=b.dataset.edit?r.id:null;draft={...r,date:b.dataset.copy?today():r.date};page='home';render();window.scrollTo(0,0);$('#seconds').focus();if(b.dataset.copy)toast('已複製到輸入欄，確認後再新增');});document.querySelectorAll('[data-delete]').forEach(b=>b.onclick=()=>safe(async()=>{const r=records.find(x=>x.id===b.dataset.delete);if(!confirm(`刪除 ${r.date} · ${r.distance} 公尺 ${r.seconds} 秒？\n刪除後本機無法復原，除非已有 JSON 或雲端版本。`))return;await writeLocal([{store:'records',delete:r.id}]);await refresh();render();toast('已刪除這筆紀錄；既有雲端成功版本仍會保留。');}));
- $('#child-form')?.addEventListener('submit',e=>{e.preventDefault();safe(async()=>{const name=$('#child-name').value.trim();if(!name)throw Error('名稱不可空白');await writeLocal([{store:'children',value:{...active(),name,ownerUid:ownerId()}}]);await refresh();render();toast('名稱已更新');});});$('#export-json')?.addEventListener('click',()=>safe(async()=>{download(`run-data-${today()}.json`,JSON.stringify(jsonExportPayload({children,records,settings},ownerId()),null,2),'application/json');await setSetting('lastBackup',new Date().toISOString());render();toast('已產生 JSON 備份，請確認檔案已下載保存');}));$('#export-csv')?.addEventListener('click',()=>download(`run-data-${today()}.csv`,csv(own()),'text/csv;charset=utf-8'));
+ $('#child-form')?.addEventListener('submit',e=>{e.preventDefault();safe(async()=>{const name=$('#child-name').value.trim();if(!name)throw Error('名稱不可空白');await writeLocal([{store:'children',value:{...active(),name,ownerUid:ownerId()}}]);await refresh();render();toast('名稱已更新');});});
+ $('#export-json')?.addEventListener('click',()=>safe(async()=>{await exportCurrentFile(`run-data-${today()}.json`,JSON.stringify(jsonExportPayload({children,records,settings},ownerId()),null,2),'application/json',{remember:true});}));
+ $('#export-csv')?.addEventListener('click',()=>safe(async()=>{await exportCurrentFile(`run-data-${today()}.csv`,csv(own()),'text/csv;charset=utf-8');}));
+ $('#copy-export-content')?.addEventListener('click',()=>safe(async()=>{const text=exportFallback?.content||$('#export-fallback-text')?.value||'';if(!text)return;if(navigator.clipboard?.writeText)await navigator.clipboard.writeText(text);else{const box=$('#export-fallback-text');if(box){box.focus();box.select();document.execCommand('copy');}}toast('已複製內容，請自行貼上存檔');}));
+ $('#show-export-fallback')?.addEventListener('click',()=>{if(exportFallback)exportFallback={...exportFallback,expanded:true};render();});
+ $('#dismiss-export-fallback')?.addEventListener('click',()=>{exportFallback=null;render();});
  $('#import-json')?.addEventListener('change',e=>safe(async()=>{backup=null;$('#backup-preview').innerHTML='';const file=e.target.files[0];if(!file)return;if(file.size>10*1024*1024)throw Error('備份檔請小於 10 MB');backup=validateBackup(JSON.parse(await file.text()));$('#backup-preview').innerHTML=`<div class="notice"><strong>有效備份：${backup.records.length} 筆紀錄、${backup.children.length} 位小孩</strong><p>將取代目前這個帳號的 ${scopedRecords().length} 筆紀錄。建議先匯出目前資料。其他 Google 帳號在本機的資料不受影響。</p><button id="restore" class="primary">確認取代並還原</button></div>`;$('#restore').onclick=()=>safe(async()=>{if(!confirm('確定以備份取代目前帳號的本機紀錄、名字與必要偏好？\n未備份的現有資料將無法復原。'))return;const b=backup;if(!b.children.length)throw Error('備份至少需有一位小孩');const owner=ownerId();const existingChildren=children.filter(c=>sameOwner(c,owner));const existingRecords=records.filter(r=>sameOwner(r,owner));const reverseId=`reverse:${owner}`;const deletes=[...existingRecords.map(r=>({store:'records',delete:r.id})),...existingChildren.map(c=>({store:'children',delete:c.id})),...(settings.find(s=>s.id===reverseId)?[{store:'settings',delete:reverseId}]:[])];const importedReverse=(Array.isArray(b.settings)?b.settings:[]).find(s=>s.id==='reverse'&&typeof s.value==='boolean');const safeSettings=(Array.isArray(b.settings)?b.settings:[]).filter(s=>(s.id==='distance'&&typeof s.value==='number'&&s.value>0&&Number.isFinite(s.value)));await writeLocal([...deletes,...b.records.map(value=>({store:'records',value:{...value,ownerUid:owner}})),...b.children.map(value=>({store:'children',value:{...value,ownerUid:owner}})),...safeSettings.map(value=>({store:'settings',value})),...(importedReverse?[{store:'settings',value:{id:reverseId,value:importedReverse.value,ownerUid:owner}}]:[])]);await refresh();distance=settings.find(s=>s.id==='distance')?.value||30;draft={date:today(),distance,seconds:'',note:'',startType:'',surface:'',timingMethod:''};editing=null;preview=[];backup=null;render();toast('備份已還原，原本機這個帳號的資料已被取代。');});}));
  bindBackupUi();
 }
 function bindPreview(){if($('#paste')){$('#paste').value=pasteDraft;$('#paste').oninput=e=>{pasteDraft=e.target.value;preview=[];$('#preview').innerHTML='';};}document.querySelectorAll('[data-preview]').forEach(input=>input.oninput=()=>{preview[Number(input.dataset.preview)].record[input.dataset.field]=input.dataset.field==='date'?input.value:Number(input.value);});$('#confirm-import')?.addEventListener('click',()=>safe(async()=>{if(preview.some(x=>x.error)||!preview.length)return;const incoming=preview.map((p,i)=>makeRecord(validate(p.record),i));if(!await saveRecords(incoming))return;preview=[];pasteDraft='';capture();render();toast(`已匯入 ${incoming.length} 筆紀錄`);}));}
 function attachNetworkHooks(){
- window.addEventListener('online',()=>{online=true;if(authUser)backupService?.checkQueue(authUser.uid);});
+ window.addEventListener('online',()=>{online=true;if(authUser)backupService?.checkQueue(authUser.uid);if(authUser&&(page==='settings')&&['offline','error'].includes(versionsQuery.status))loadVersions().then(render);});
  window.addEventListener('offline',()=>{online=false;render();});
  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&authUser)backupService?.checkQueue(authUser.uid);});
 }
@@ -236,7 +309,14 @@ try{
   initFirebase
  });
  authService.subscribe(snap=>{
+  const prevUid=authUser?.uid||null;
+  const nextUid=snap.user?.uid||null;
   authInfo=snap;authUser=snap.user;
+  if(prevUid!==nextUid){
+   lastSuccessKey='';
+   clearRestoreList();
+   if(page==='settings')queueMicrotask(()=>loadVersions().finally(render));
+  }
   if(snap.user&&cloud===null&&authService.getFirebase()?.firestore){
    const mods=authService.getModules();
    cloud=createFirestoreCloud({firestore:authService.getFirebase().firestore,fs:mods.firestore});
@@ -250,7 +330,17 @@ try{
   getAppMeta:()=>ensureAppMeta(),
   isOnline:()=>navigator.onLine!==false,
   tabId,
-  onStatus:extra=>{statusExtra=extra;accountState&&(accountState={...accountState,...(extra.lastSuccess?{lastSuccess:extra.lastSuccess}:{}),...(extra.lastError?{lastError:extra.lastError}:{})});const bar=$('#backup-status');if(bar){const s=statusView();bar.textContent=s.text;bar.dataset.state=s.code;bar.className=`backup-status ${s.tone}`;}}
+  onStatus:extra=>{
+   statusExtra=extra;
+   accountState&&(accountState={...accountState,...(extra.lastSuccess?{lastSuccess:extra.lastSuccess}:{}),...(extra.lastError?{lastError:extra.lastError}:{})});
+   const bar=$('#backup-status');
+   if(bar){const s=statusView();bar.textContent=s.text;bar.dataset.state=s.code;bar.className=`backup-status ${s.tone}`;}
+   const successKey=extra.lastSuccess?`${extra.lastSuccess.backupId||''}:${extra.lastSuccess.completedAt||''}`:'';
+   if(successKey&&successKey!==lastSuccessKey&&extra.uploading===false){
+    lastSuccessKey=successKey;
+    loadVersions().then(()=>{if(page==='settings')render();});
+   }
+  }
  });
  await refresh();await ensureChild();
  const bootAuth=await authService.start();

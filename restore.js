@@ -21,6 +21,36 @@ export async function listRestorableVersions(cloud,uid){
  return versions;
 }
 
+export function restoreListCopy(status,versions=[]){
+ const texts={
+  'signed-out':'登入 Google 帳號後即可查詢雲端版本。不必先開啟本機自動備份。',
+  unavailable:'雲端元件尚未就緒，請稍後再試。',
+  idle:'尚未查詢雲端版本。',
+  loading:'正在查詢可還原的雲端版本…',
+  empty:'還沒有可還原的成功版本。未完成的上傳不會出現在這裡。',
+  offline:'目前離線或連線失敗，無法查詢雲端版本。',
+  permission:'沒有權限讀取雲端版本。',
+  reauth:'登入已過期，請重新登入後再查詢版本。',
+  error:'查詢雲端版本失敗，請再試一次。',
+  ready:`找到 ${versions.length} 個可還原的成功版本。`
+ };
+ return texts[status]||texts.error;
+}
+
+export async function queryRestorableVersions(cloud,uid,{online=true,previous=[]}={}){
+ if(!uid)return {status:'signed-out',versions:[],error:null};
+ if(!cloud)return {status:'unavailable',versions:[],error:null};
+ if(online===false)return {status:'offline',versions:previous,error:{kind:'network',code:'unavailable',fatal:false}};
+ try{
+  const versions=await listRestorableVersions(cloud,uid);
+  return {status:versions.length?'ready':'empty',versions,error:null};
+ }catch(error){
+  const classified=classifyBackupError(error);
+  const status=classified.kind==='reauth'?'reauth':classified.kind==='permission'?'permission':classified.kind==='network'?'offline':'error';
+  return {status,versions:previous,error:classified};
+ }
+}
+
 export async function downloadAndVerify(cloud,version,sha=sha256){
  const chunks=await cloud.listChunks(version.uid,version.deviceId,version.backupId);
  if(chunks.length!==version.chunkCount)throw Error('還原失敗：塊數不完整');
@@ -44,6 +74,7 @@ export async function downloadAndVerify(cloud,version,sha=sha256){
 
 export async function restoreVersion({db,cloud,uid,version,settings,sha=sha256}){
  const verified=await downloadAndVerify(cloud,version,sha);
+ if(!verified?.payload)throw Error('還原失敗：完整性檢查未通過');
  const payload=verified.payload;
  const [records,children,allSettings,account]=await Promise.all([
   db.all('records'),db.all('children'),db.all('settings'),db.getAccount(uid)
@@ -81,10 +112,15 @@ export async function restoreVersion({db,cloud,uid,version,settings,sha=sha256})
 }
 
 export function restorePreview(version,localRecordCount){
+ const device=version.deviceLabel||deviceLabel(version.deviceId);
+ const when=version.completedLabel||formatBackupTime(version.completedAt);
  return {
-  title:`還原 ${version.deviceLabel||deviceLabel(version.deviceId)} · ${version.completedLabel||formatBackupTime(version.completedAt)}`,
+  title:`還原 ${device} · ${when}`,
+  deviceLabel:device,
+  completedLabel:when,
   recordCount:version.recordCount,
   childCount:version.childCount,
+  localRecordCount,
   replaceScope:`將取代目前這個帳號在本機的 ${localRecordCount} 筆紀錄（不是合併）。其他裝置的雲端版本不會被覆寫。`
  };
 }

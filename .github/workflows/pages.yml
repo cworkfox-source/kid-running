@@ -33,7 +33,7 @@ jobs:
       - name: Assemble static site
         run: |
           mkdir -p _site
-          cp index.html styles.css app.js core.js db.js sw.js auth.js backup.js restore.js firebase.js firebase-config.js cloud.js _site/
+          cp index.html styles.css app.js core.js db.js sw.js auth.js backup.js restore.js export.js firebase.js firebase-config.js cloud.js _site/
       - name: Setup Pages
         uses: actions/configure-pages@v5
       - name: Upload artifact

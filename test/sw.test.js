@@ -9,13 +9,14 @@ const app=await readFile(new URL('../app.js',import.meta.url),'utf8');
 test('CACHE 至少為 kid-running-v4',()=>{
  const match=sw.match(/CACHE\s*=\s*'kid-running-v(\d+)'/);
  assert.ok(match,'sw.js 必須宣告 CACHE');
- assert.ok(Number(match[1])>=4,`CACHE 應 ≥ v4，實際 v${match[1]}`);
+ assert.ok(Number(match[1])>=8,`CACHE 應 ≥ v8，實際 v${match[1]}`);
 });
 
 test('install 會 skipWaiting，activate 會清舊快取並 claim',()=>{
  assert.match(sw,/skipWaiting\s*\(/);
  assert.match(sw,/clients\.claim\s*\(/);
  assert.match(sw,/startsWith\(\s*['"]kid-running-['"]\s*\)/);
+ assert.match(sw,/export\.js/);
 });
 
 test('HTML／導覽與 app.js 為 network-first，且只攔 same-origin GET',()=>{
@@ -29,5 +30,6 @@ test('HTML／導覽與 app.js 為 network-first，且只攔 same-origin GET',()=
 
 test('Pages assemble 仍複製 sw.js；註冊時不走 HTTP 快取 SW 腳本',()=>{
  assert.match(pages,/\bsw\.js\b/);
+ assert.match(pages,/\bexport\.js\b/);
  assert.match(app,/serviceWorker\.register\(\s*['"]\.\/sw\.js['"]\s*,\s*\{\s*updateViaCache\s*:\s*['"]none['"]/);
 });

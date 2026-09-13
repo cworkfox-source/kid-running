@@ -79,10 +79,10 @@ function restoreStatusCode(){
 function restorePanelHTML(){
  const status=restoreStatusCode();
  const shown=versionsQuery.versions||versions;
- const copy=restoreListCopy(status,shown);
- const retryLabel=status==='loading'?'查詢中…':status==='ready'||status==='empty'?'重新整理':status==='signed-out'||status==='idle'?'查詢雲端版本':'再試一次';
+ const copy=restoreListCopy(status,shown,{lastSuccess:accountState?.lastSuccess});
+ const retryLabel=status==='loading'?'查詢中…':status==='ready'||status==='empty'||status==='inconsistent'?'重新整理':status==='signed-out'||status==='idle'?'查詢雲端版本':'再試一次';
  const canQuery=Boolean(authUser);
- const hideList=['signed-out','unavailable','empty'].includes(status);
+ const hideList=['signed-out','unavailable','empty','inconsistent'].includes(status);
  const list=hideList?[]:shown;
  const listHTML=Array.isArray(list)&&list.length?`<ul class="version-list">${list.map((v,i)=>`<li><div><strong>${esc(v.deviceLabel||v.deviceId)}</strong><p>${esc(v.completedLabel||'時間未知')} · 雲端 ${v.recordCount??0} 筆${i===0?' · 最近完成':''}</p></div><button class="secondary" data-restore="${esc(v.backupId)}" data-device="${esc(v.deviceId)}">預覽還原</button></li>`).join('')}</ul>`:'';
  const preview=selectedRestore?restorePreview(selectedRestore,scopedRecords().length):null;
@@ -112,7 +112,7 @@ ${restorePanelHTML()}
 <section class="card"><h2>本機 JSON／CSV</h2><div class="notice">資料仍以這台裝置的 IndexedDB 為日常來源。清除網站資料或更換手機前，建議再匯出一份 JSON。</div>${exportFallbackHTML()}<div class="settings-row"><div><strong>JSON 完整備份</strong><p>保留目前帳號的紀錄、小孩與必要偏好</p></div><button class="secondary" id="export-json">匯出 JSON</button></div><div class="settings-row"><div><strong>CSV 成績表</strong><p>供 Excel、Google Sheets 或分析使用</p></div><button class="secondary" id="export-csv">匯出 CSV</button></div><div class="settings-row"><div><strong>還原 JSON 備份</strong><p>先檢查內容，再確認取代目前帳號的本機資料</p></div><label class="secondary file-label">選擇檔案<input id="import-json" type="file" accept=".json,application/json"></label></div><div id="backup-preview"></div><p class="quiet">目前這個帳號共 ${scopedRecords().length} 筆紀錄。${settings.find(s=>s.id==='lastBackup')?`上次匯出：${esc(new Date(settings.find(s=>s.id==='lastBackup').value).toLocaleString('zh-TW'))}`:'尚未匯出備份。'}</p></section>
 <section class="card"><h2>關於小步快跑</h2><p class="muted">快速記錄、文字解析與分析都在你的裝置完成。雲端備份是選用的版本保險，不是即時雙向同步。</p><p class="quiet">首次開啟需要網路；載入完成後會準備離線快取。Firebase SDK 若暫時失敗，本機仍可記錄。新增時保留原始秒數，畫面顯示四捨五入至小數點後兩位。</p></section>`;}
 function capture(){for(const k of ['date','distance','seconds','note','startType','surface','timingMethod'])if($('#'+k))draft[k]=$('#'+k).value;}
-function changePage(p){if(page==='home')capture();page=p;history.replaceState(null,'','#'+p);if(p==='settings'){if(authUser&&!['ready','empty','offline','permission','reauth','error'].includes(versionsQuery.status))versionsQuery={...versionsQuery,status:'loading'};render();loadVersions().finally(render);}else render();window.scrollTo(0,0);}
+function changePage(p){if(page==='home')capture();page=p;history.replaceState(null,'','#'+p);if(p==='settings'){if(authUser&&!['ready','empty','inconsistent','offline','permission','reauth','error'].includes(versionsQuery.status))versionsQuery={...versionsQuery,status:'loading'};render();loadVersions().finally(render);}else render();window.scrollTo(0,0);}
 async function refresh(){[records,children,settings]=await Promise.all([all('records'),all('children'),all('settings')]);appMeta=await ensureAppMeta();accountState=await getAccount(ownerId());}
 async function ensureChild(){if(active())return;await write([{store:'children',value:{id:defaultChildId(ownerId()),name:'小孩',birthday:null,ownerUid:ownerId()}}]);await refresh();}
 async function safe(fn){if(busy)return;busy=true;try{await fn();}catch(e){toast(`未完成：${e.message}。資料未成功儲存時請勿關閉頁面。`);}finally{busy=false;}}
@@ -138,7 +138,7 @@ async function loadVersions(){
  const btn=$('#refresh-restore-versions');
  if(btn){btn.disabled=true;btn.textContent='查詢中…';}
  try{
-  const result=await queryRestorableVersions(cloud,uid,{online,previous:versions});
+  const result=await queryRestorableVersions(cloud,uid,{online,previous:versions,lastSuccess:accountState?.lastSuccess});
   if(authUser?.uid!==uid)return;
   versionsQuery=result;
   versions=result.versions||[];

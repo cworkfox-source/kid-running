@@ -16,6 +16,7 @@
 .restore-status{font-size:12px;line-height:1.7;margin:0 0 12px;padding:10px 12px;border-radius:10px;background:#f3f6f3;color:#5d7268}
 .restore-status.loading,.restore-status.ready{background:#eef4fb;color:#355a7a}
 .restore-status.empty{background:#f3f6f3;color:#7b8885}
+.restore-status.inconsistent{background:#f7f1e4;color:#8a6a32}
 .restore-status.offline,.restore-status.unavailable,.restore-status.error{background:#f7f1e4;color:#8a6a32}
 .restore-status.permission,.restore-status.reauth{background:#fbeeee;color:#9a4a3a}
 .restore-preview-card p{margin:6px 0}

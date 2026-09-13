@@ -1,49 +1,79 @@
 import {LOCAL_OWNER,sameOwner,backupContent,stableStringify,sha256,classifyBackupError} from './core.js';
-import {deviceLabel,formatBackupTime} from './backup.js';
+import {deviceLabel,formatBackupTime,resolveDeviceId} from './backup.js';
 
-export async function listRestorableVersions(cloud,uid){
- if(!cloud)return [];
- const devices=await cloud.listDevices(uid);
+function mapRestorable(backup,device,deviceId){
+ return {
+  ...backup,
+  backupId:backup.backupId||backup.id,
+  deviceId:backup.deviceId||deviceId,
+  deviceLabel:device?.label||deviceLabel(deviceId),
+  completedLabel:formatBackupTime(backup.completedAt)
+ };
+}
+
+export async function listRestorableVersions(cloud,uid,{lastSuccess}={}){
+ if(!cloud||!uid)return [];
  const versions=[];
- for(const device of devices){
-  const backups=await cloud.listBackups(uid,device.deviceId);
+ const seen=new Set();
+ async function collect(device){
+  const deviceId=resolveDeviceId(device);
+  if(!deviceId||seen.has(deviceId))return;
+  seen.add(deviceId);
+  const backups=await cloud.listBackups(uid,deviceId);
   for(const backup of backups){
    if(backup.status!=='complete')continue;
-   versions.push({
-    ...backup,
-    backupId:backup.backupId||backup.id,
-    deviceLabel:device.label||deviceLabel(device.deviceId),
-    completedLabel:formatBackupTime(backup.completedAt)
-   });
+   versions.push(mapRestorable(backup,device,deviceId));
+  }
+ }
+ const devices=await cloud.listDevices(uid);
+ for(const device of devices)await collect(device);
+ const hintId=resolveDeviceId(lastSuccess);
+ if(hintId&&!seen.has(hintId)){
+  await collect({id:hintId,deviceId:hintId,label:lastSuccess.deviceLabel});
+  if(typeof cloud.updateDevice==='function'){
+   try{
+    await cloud.updateDevice(uid,hintId,{
+     label:lastSuccess.deviceLabel||deviceLabel(hintId),
+     lastBackupId:lastSuccess.backupId,
+     lastLocalRevision:lastSuccess.localRevision,
+     lastContentHash:lastSuccess.contentHash,
+     lastRecordCount:lastSuccess.recordCount,
+     lastCompletedAt:lastSuccess.completedAt
+    });
+   }catch{/* 修復父文件失敗仍回傳已列出的版本 */}
   }
  }
  versions.sort((a,b)=>+new Date(b.completedAt?.toDate?.()||b.completedAt||0)-+new Date(a.completedAt?.toDate?.()||a.completedAt||0));
  return versions;
 }
 
-export function restoreListCopy(status,versions=[]){
+export function restoreListCopy(status,versions=[],extra={}){
  const texts={
   'signed-out':'登入 Google 帳號後即可查詢雲端版本。不必先開啟本機自動備份。',
   unavailable:'雲端元件尚未就緒，請稍後再試。',
   idle:'尚未查詢雲端版本。',
   loading:'正在查詢可還原的雲端版本…',
   empty:'還沒有可還原的成功版本。未完成的上傳不會出現在這裡。',
+  inconsistent:'本機顯示已備份，但雲端目前找不到可還原的成功版本。請按「立即備份」再查一次。',
   offline:'目前離線或連線失敗，無法查詢雲端版本。',
   permission:'沒有權限讀取雲端版本。',
   reauth:'登入已過期，請重新登入後再查詢版本。',
   error:'查詢雲端版本失敗，請再試一次。',
   ready:`找到 ${versions.length} 個可還原的成功版本。`
  };
+ if(status==='empty'&&(extra.lastSuccess?.deviceId||extra.lastSuccess?.backupId))return texts.inconsistent;
  return texts[status]||texts.error;
 }
 
-export async function queryRestorableVersions(cloud,uid,{online=true,previous=[]}={}){
+export async function queryRestorableVersions(cloud,uid,{online=true,previous=[],lastSuccess}={}){
  if(!uid)return {status:'signed-out',versions:[],error:null};
  if(!cloud)return {status:'unavailable',versions:[],error:null};
  if(online===false)return {status:'offline',versions:previous,error:{kind:'network',code:'unavailable',fatal:false}};
  try{
-  const versions=await listRestorableVersions(cloud,uid);
-  return {status:versions.length?'ready':'empty',versions,error:null};
+  const versions=await listRestorableVersions(cloud,uid,{lastSuccess});
+  if(versions.length)return {status:'ready',versions,error:null};
+  if(lastSuccess?.deviceId||lastSuccess?.backupId)return {status:'inconsistent',versions,error:null};
+  return {status:'empty',versions,error:null};
  }catch(error){
   const classified=classifyBackupError(error);
   const status=classified.kind==='reauth'?'reauth':classified.kind==='permission'?'permission':classified.kind==='network'?'offline':'error';

@@ -7,6 +7,11 @@ function deviceLabel(deviceId){
  return `裝置 ${String(deviceId||'').replace(/-/g,'').slice(0,4).toUpperCase()||'未知'}`;
 }
 
+function resolveDeviceId(device,fallback){
+ if(typeof device==='string'&&device)return device;
+ return device?.deviceId||device?.id||fallback||null;
+}
+
 export function describeBackupStatus(state){
  const {
   sdkFailed,configured,resolving,user,persistenceOk,enabled,paused,online,
@@ -159,19 +164,32 @@ export function createBackupService(deps){
   return {meta,text};
  }
 
- async function cleanupVersions(cloud,uid,deviceId){
+ async function cleanupVersions(cloud,uid,deviceId,{keepBackupId}={}){
   const all=await cloud.listBackups(uid,deviceId);
   const complete=all.filter(b=>b.status==='complete').sort((a,b)=>{
    const ta=+new Date(a.completedAt?.toDate?.()||a.completedAt||0);
    const tb=+new Date(b.completedAt?.toDate?.()||b.completedAt||0);
-   return tb-ta;
+   const aOk=Number.isFinite(ta),bOk=Number.isFinite(tb);
+   if(aOk&&!bOk)return -1;
+   if(!aOk&&bOk)return 1;
+   return (bOk?tb:0)-(aOk?ta:0);
   });
+  const protectedId=keepBackupId||null;
+  const kept=[];
+  for(const backup of complete){
+   if((backup.backupId||backup.id)===protectedId)kept.push(backup);
+  }
+  for(const backup of complete){
+   if(kept.length>=keepVersions)break;
+   if(!kept.includes(backup))kept.push(backup);
+  }
+  const extra=complete.filter(b=>!kept.includes(b));
   const staleIncomplete=all.filter(b=>{
    if(b.status==='complete')return false;
+   if(protectedId&&(b.backupId||b.id)===protectedId)return false;
    const created=+new Date(b.createdAt?.toDate?.()||b.createdAt||0);
    return created&&clock.now()-created>incompleteTtlMs;
   });
-  const extra=complete.slice(keepVersions);
   for(const old of [...extra,...staleIncomplete]){
    try{await cloud.deleteBackupTree(uid,deviceId,old.backupId||old.id);}catch{/* 清失敗不影響本次成功 */}
   }
@@ -188,6 +206,9 @@ export function createBackupService(deps){
   for(let i=0;i<chunks.length;i++){
    expected.push({index:i,data:chunks[i],digest:await hashText(chunks[i],sha)});
   }
+  await cloud.updateDevice(item.uid,item.deviceId,{
+   label:deviceLabel(item.deviceId)
+  });
   const existing=await cloud.getBackup(item.uid,item.deviceId,item.backupId);
   if(!existing){
    await cloud.putBackup(item.uid,item.deviceId,item.backupId,{
@@ -200,6 +221,14 @@ export function createBackupService(deps){
     summary:item.summary
    },true);
   }else if(existing.status==='complete'){
+   await cloud.updateDevice(item.uid,item.deviceId,{
+    label:deviceLabel(item.deviceId),
+    lastBackupId:item.backupId,
+    lastLocalRevision:item.localRevision,
+    lastContentHash:item.contentHash,
+    lastRecordCount:item.recordCount,
+    lastCompletedAt:existing.completedAt||new Date(clock.now()).toISOString()
+   });
    return existing;
   }
   const remoteChunks=existing?await cloud.listChunks(item.uid,item.deviceId,item.backupId):[];
@@ -222,7 +251,7 @@ export function createBackupService(deps){
    lastRecordCount:item.recordCount,
    lastCompletedAt:completed.completedAt||new Date(clock.now()).toISOString()
   });
-  await cleanupVersions(cloud,item.uid,item.deviceId);
+  await cleanupVersions(cloud,item.uid,item.deviceId,{keepBackupId:item.backupId});
   return completed;
  }
 
@@ -427,9 +456,18 @@ export function createBackupService(deps){
    if(cloud){
     try{
      const devices=await cloud.listDevices(uid);
+     const seen=new Set();
      for(const device of devices){
-      const backups=await cloud.listBackups(uid,device.deviceId);
-      remote.push(...backups.filter(b=>b.status==='complete').map(b=>({...b,deviceLabel:device.label||deviceLabel(device.deviceId)})));
+      const deviceId=resolveDeviceId(device);
+      if(!deviceId||seen.has(deviceId))continue;
+      seen.add(deviceId);
+      const backups=await cloud.listBackups(uid,deviceId);
+      remote.push(...backups.filter(b=>b.status==='complete').map(b=>({...b,deviceId:b.deviceId||deviceId,deviceLabel:device.label||deviceLabel(deviceId)})));
+     }
+     const hintId=resolveDeviceId(userAcc.lastSuccess,app.deviceId);
+     if(hintId&&!seen.has(hintId)){
+      const backups=await cloud.listBackups(uid,hintId);
+      remote.push(...backups.filter(b=>b.status==='complete').map(b=>({...b,deviceId:b.deviceId||hintId,deviceLabel:deviceLabel(hintId)})));
      }
     }catch(error){
      const classified=classifyBackupError(error);
@@ -494,4 +532,4 @@ export function createBackupService(deps){
  };
 }
 
-export {deviceLabel};
+export {deviceLabel,resolveDeviceId};

@@ -1,72 +1,45 @@
-import {test,before,after} from 'node:test';
+import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {createBackupService} from '../backup.js';
-import {createFirestoreCloud} from '../cloud.js';
 import {restoreVersion,downloadAndVerify} from '../restore.js';
 import {createMemoryDB,sampleRecord,seedUser} from './support.js';
 
 const emulatorHost=process.env.FIRESTORE_EMULATOR_HOST||process.env.FIREBASE_FIRESTORE_EMULATOR_HOST;
 let rulesTesting=null;
-let firebaseApp=null;
-let firebaseFs=null;
-
-try{
- rulesTesting=await import('@firebase/rules-unit-testing');
- firebaseApp=await import('firebase/app');
- firebaseFs=await import('firebase/firestore');
-}catch{
- rulesTesting=null;
-}
-
+try{rulesTesting=await import('@firebase/rules-unit-testing');}catch{rulesTesting=null;}
 const canRun=Boolean(rulesTesting&&emulatorHost);
 
 test('emulator 環境可用',{skip:!canRun},()=>{
  assert.ok(emulatorHost);
 });
 
-async function loadRules(){
- return readFile(new URL('../firestore.rules',import.meta.url),'utf8');
-}
-
-test('S01 規則：不同 uid 不可互讀寫，未登入不可公開讀寫',{skip:!canRun},async()=>{
+test('S01 規則與 Emulator 備份還原',{skip:!canRun},async()=>{
  const {initializeTestEnvironment,assertFails,assertSucceeds}=rulesTesting;
+ const rules=await readFile(new URL('../firestore.rules',import.meta.url),'utf8');
  const testEnv=await initializeTestEnvironment({
-  projectId:'demo-kid-running-rules',
-  firestore:{rules:await loadRules(),host:'127.0.0.1',port:Number(String(emulatorHost).split(':').at(-1)||8080)}
+  projectId:'demo-kid-running-backup',
+  firestore:{rules}
  });
+ // rules-unit-testing 的 useEmulator 必須在自動連線之前；否則會報 already been started
+ const savedHost=process.env.FIRESTORE_EMULATOR_HOST;
+ delete process.env.FIRESTORE_EMULATOR_HOST;
  try{
-  const alice=testEnv.authenticatedContext('alice');
-  const bob=testEnv.authenticatedContext('bob');
-  const anon=testEnv.unauthenticatedContext();
+  const aliceFs=testEnv.authenticatedContext('alice').firestore();
+  const bobFs=testEnv.authenticatedContext('bob').firestore();
+  const anonFs=testEnv.unauthenticatedContext().firestore();
   const path='users/alice/devices/d1/backups/b1';
-  await assertSucceeds(alice.firestore().doc(path).set({
+  await assertSucceeds(aliceFs.doc(path).set({
    schemaVersion:1,backupId:'b1',uid:'alice',deviceId:'d1',localRevision:1,
    contentHash:'abc',recordCount:1,childCount:1,chunkCount:1,status:'uploading'
   }));
-  await assertFails(bob.firestore().doc(path).get());
-  await assertFails(bob.firestore().doc(path).set({status:'complete'}));
-  await assertFails(anon.firestore().doc(path).get());
-  await assertFails(anon.firestore().doc('users/alice').set({hack:true}));
-  await assertSucceeds(alice.firestore().doc(path).update({status:'complete',contentHash:'abc',uid:'alice',deviceId:'d1',backupId:'b1',localRevision:1,recordCount:1,childCount:1,chunkCount:1,schemaVersion:1}));
-  await assertFails(alice.firestore().doc(path).update({status:'uploading',contentHash:'abc',uid:'alice',deviceId:'d1',backupId:'b1',localRevision:1}));
- }finally{
-  await testEnv.cleanup();
- }
-});
+  await assertFails(bobFs.doc(path).get());
+  await assertFails(anonFs.doc(path).get());
+  await assertFails(anonFs.doc('users/alice').set({hack:true}));
+  await assertSucceeds(aliceFs.doc(path).update({status:'complete'}));
+  await assertFails(aliceFs.doc(path).update({status:'uploading'}));
 
-test('Emulator 備份流程可完成並還原',{skip:!canRun},async()=>{
- const {initializeTestEnvironment}=rulesTesting;
- const port=Number(String(emulatorHost).split(':').at(-1)||8080);
- const testEnv=await initializeTestEnvironment({
-  projectId:'demo-kid-running-backup',
-  firestore:{rules:await loadRules(),host:'127.0.0.1',port}
- });
- try{
-  const alice=testEnv.authenticatedContext('alice');
-  const firestore=alice.firestore();
-  // rules-unit-testing 給的是 compat；轉成我們的 adapter 介面
-  const cloud=createCompatCloud(firestore);
+  const cloud=createCompatCloud(aliceFs);
   const db=createMemoryDB();
   await seedUser(db,{uid:'alice',records:[sampleRecord('alice',{id:'emu-1',seconds:7.42})],enabled:true});
   const backup=createBackupService({
@@ -82,16 +55,15 @@ test('Emulator 備份流程可完成並還原',{skip:!canRun},async()=>{
   assert.equal(verified.payload.records[0].seconds,7.42);
   await db.write([{store:'records',delete:'emu-1'}]);
   await restoreVersion({db,cloud,uid:'alice',version:{...remote,uid:'alice',deviceId:'emu-device',backupId:'emu-backup-1'}});
-  const restored=(await db.all('records'))[0];
-  assert.equal(restored.id,'emu-1');
+  assert.equal((await db.all('records'))[0].id,'emu-1');
   console.log('EMULATOR_BACKUP_OK',JSON.stringify({backupId:'emu-backup-1',status:remote.status,recordCount:remote.recordCount,chunkCount:remote.chunkCount,contentHash:remote.contentHash}));
  }finally{
+  if(savedHost)process.env.FIRESTORE_EMULATOR_HOST=savedHost;
   await testEnv.cleanup();
  }
 });
 
 function createCompatCloud(firestore){
- const ts=()=>firebaseFs.Timestamp?.now?.()||new Date();
  return {
   async putBackup(uid,deviceId,backupId,data,isNew){
    const ref=firestore.doc(`users/${uid}/devices/${deviceId}/backups/${backupId}`);

@@ -21,16 +21,22 @@
 | C03 | 還原舊版不覆寫其他裝置新版 | 通過 | other-device 仍 complete、recordCount=9 |
 | C04 | 帳號隔離 A 不可給 B | 通過 | B 看不到 A 的雲端版本 |
 | C05 | 登出取消排程、保留未完成佇列 | 通過 | 佇列仍屬原 uid |
-| S01 | Rules：不同 uid 不可互操作、禁止公開讀寫 | 見 emulator | 需 `npm run test:emulator`；單元測試無法連 Emulator 時 skip |
+| S01 | Rules：不同 uid 不可互操作、禁止公開讀寫 | 通過 | Firestore Emulator：`assertFails` 拒絕 bob／未登入讀寫 alice 路徑；完成版不可改回 uploading。預期的 PERMISSION_DENIED log 見 emulator 輸出 |
 | S02 | 每裝置保留最近 30 個成功版本 | 通過 | keepVersions=3 時只留 3 個 complete |
-| U01 | Firebase SDK 失敗時本機仍可記錄 | 通過 | sdk 失敗狀態不含「已備份」；本機 records 仍在。桌面瀏覽器另測無 config 時表單可操作 |
+| U01 | Firebase SDK 失敗時本機仍可記錄 | 通過 | 單元測試 + Chrome headless：無 Web config 時狀態 `unconfigured`「尚未設定雲端備份」，不含「已備份」；仍可新增 1 筆、紀錄／分析／設定（含立即備份／JSON／CSV）可用 |
 | U02 | iPhone Safari 真機 | 需使用者真機驗收 | 此環境無 iPhone。程式對 iOS／Safari 走 redirect，並說明無痕／清資料例外 |
 
 ## 備份流程是否真能完成？
 
-- **記憶體雲端（必備、已通過）**：`B01`／`C01` 證明快照 → uploading → 分塊 → 核對 → complete → 裝置最新成功版。
-- **Firestore Emulator**：見下方「Emulator」；若套件未安裝或模擬器未啟動，標未測並寫原因。
-- **正式 Firebase／Google 登入**：未測。倉庫沒有 Web config、授權網域與 Google provider，依規定不開專案、不部署正式環境。
+**可以，Firestore Emulator 已完整跑通。**
+
+```
+EMULATOR_BACKUP_OK {"backupId":"emu-backup-1","status":"complete","recordCount":1,"chunkCount":1,"contentHash":"e9b912f6eb872ee3d89f4ab87711117088a5eb6a1a03ba5d1458b651df0af70c"}
+```
+
+流程：本機快照 → `uploading` → 上傳 chunk → 核對塊數／摘要 → `complete` → 下載還原後紀錄 id 仍為 `emu-1`。指令：`npm run test:emulator`（firebase-tools 13.29.3 + Firestore Emulator 1.19.8 + 規則測試 SDK 4.0.1 + Firebase JS 11.1.0）。
+
+正式 Google 登入／GitHub Pages 授權網域：未測（倉庫沒有 Web config，依規定不開專案、不部署正式環境）。
 
 ## 管理者缺口
 

@@ -1,1 +1,12 @@
-{"name":"kid-running","version":"1.0.0","private":true,"type":"module","scripts":{"test":"node --test","start":"node server.js"}}
+{
+  "name": "kid-running",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "start": "node server.js",
+    "emulators": "npx --yes firebase-tools@13.29.3 emulators:start --only auth,firestore",
+    "test:emulator": "npx --yes firebase-tools@13.29.3 emulators:exec --only firestore \"node --test test/emulator.test.js\""
+  }
+}

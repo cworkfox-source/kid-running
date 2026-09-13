@@ -79,11 +79,13 @@ export function createClock(){
   advance(ms){
    now+=ms;
    const due=timers.filter(timer=>timer.at<=now).sort((a,b)=>a.at-b.at);
+   const results=[];
    for(const timer of due){
     const i=timers.indexOf(timer);
     if(i>=0)timers.splice(i,1);
-    timer.fn();
+    results.push(timer.fn());
    }
+   return results;
   }
  };
 }

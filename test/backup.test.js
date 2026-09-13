@@ -363,6 +363,21 @@ async function drain(n=40){
  for(let i=0;i<n;i++)await new Promise(r=>setImmediate(r));
 }
 
+async function settle(values){
+ await Promise.all((Array.isArray(values)?values:[values]).filter(Boolean).map(value=>Promise.resolve(value)));
+}
+
+async function waitUntil(predicate,{timeout=5000}={}){
+ const deadline=Date.now()+timeout;
+ let last;
+ while(Date.now()<=deadline){
+  last=await predicate();
+  if(last)return last;
+  await new Promise(r=>setTimeout(r,0));
+ }
+ return last;
+}
+
 test('非致命上傳失敗會用 clock.setTimeout 排程下次 processQueue',async()=>{
  const db=createMemoryDB();
  let putCalls=0;
@@ -401,19 +416,17 @@ test('非致命上傳失敗會用 clock.setTimeout 排程下次 processQueue',as
  const early=await backup.checkQueue('user-a');
  assert.equal(early.reason,'wait-retry');
  assert.equal(putCalls,1);
- clock.advance(Math.max(0,queued.nextRetryAt-clock.now()-1));
+ await settle(clock.advance(Math.max(0,queued.nextRetryAt-clock.now()-1)));
  await drain();
  assert.equal(putCalls,1,'尚未到 nextRetryAt 不應重試');
- clock.advance(2);
- let backups=[];
- for(let i=0;i<120;i++){
-  await new Promise(r=>setImmediate(r));
-  backups=await inner.listBackups('user-a','device-test-1');
-  if(backups[0]?.status==='complete')break;
- }
+ await settle(clock.advance(Math.max(1,queued.nextRetryAt-clock.now()+1)));
+ const done=await waitUntil(async()=>{
+  const backups=await inner.listBackups('user-a','device-test-1');
+  return putCalls>=2&&backups[0]?.status==='complete'?backups:null;
+ });
  assert.ok(putCalls>=2,'到期後應再呼叫 processQueue／上傳');
- assert.equal(backups[0]?.status,'complete');
- assert.equal(backups[0].backupId,'retry-id');
+ assert.equal(done?.[0]?.status,'complete');
+ assert.equal(done?.[0]?.backupId,'retry-id');
 });
 
 test('U01 SDK 失敗時狀態不顯示已備份，本機資料仍在',async()=>{

@@ -87,7 +87,7 @@ GitHub Actions 會把靜態檔（含 auth/backup/restore/firebase/cloud 模組�
 
 首次啟用請到倉庫 **Settings → Pages → Build and deployment → Source** 選 **GitHub Actions**。若第一次 workflow 在開啟 Pages 前失敗，改完設定後到 **Actions** 重新執行 **Deploy static content to Pages**。
 
-每次更新前端須同步提高 `sw.js` 的 CACHE 版本（目前 `kid-running-v5`）。新 SW 安裝時會 `skipWaiting()`，啟用時刪除舊的 `kid-running-*` 快取並 `clients.claim()`；導覽／HTML 與 `app.js` 採 network-first（離線才回退快取），一般重新整理即可拿到新頁面，不必手動清除網站資料。不提供安裝 UI。離線功能需首次成功載入、Service Worker 完成安裝後才能使用；行動裝置經區網 HTTP 不支援 Service Worker，請用 HTTPS 測試。
+每次更新前端須同步提高 `sw.js` 的 CACHE 版本（目前 `kid-running-v6`）。新 SW 安裝時會 `skipWaiting()`，啟用時刪除舊的 `kid-running-*` 快取並 `clients.claim()`；導覽／HTML 與 `app.js` 採 network-first（離線才回退快取），一般重新整理即可拿到新頁面，不必手動清除網站資料。不提供安裝 UI。離線功能需首次成功載入、Service Worker 完成安裝後才能使用；行動裝置經區網 HTTP 不支援 Service Worker，請用 HTTPS 測試。
 
 ## 注意
 

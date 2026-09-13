@@ -24,8 +24,8 @@
 > kid-running@1.1.0 test
 > node --test test/*.test.js
 
-# tests 65
-# pass 63
+# tests 67
+# pass 65
 # fail 0
 # skipped 2
 ```
@@ -78,7 +78,7 @@ bob 讀 alice 路徑由 `assertFails(get)` 覆蓋（讀取拒絕不會出現在�
 | A01 | Google 登入使用本機持久（非僅分頁 session） | 通過 | `npm test` |
 | A02 | 啟動先等 auth 狀態再判斷，不誤報雲端成功 | 通過 | `npm test`：已設定 `kid-running`；未登入狀態為「尚未啟用」，不含「已備份」 |
 | A03 | 持久不可用時明確提示 | 通過 | `npm test` |
-| A04 | iPhone／Safari 先 popup；redirect 失敗可見 | 通過 | `npm test`：iPhone UA 仍 popup；`getRedirectResult` 錯誤／空結果寫入 `loadError` |
+| A04 | iPhone／Safari 先 popup；redirect 失敗可見；回來後要啟用備份 | 通過 | `npm test`：popup-first；`getRedirectResult` 錯誤／空結果寫入 `loadError`；redirect user 不被第一次 null auth 清掉；有 user 且尚未 backupEnabled 會走 enableForUser |
 | B01 | 本機有、雲端無 → 上傳第一個完整版本 | 通過 | `npm test` |
 | B02 | 兩邊空白 → 等待第一筆，不建空成功版 | 通過 | `npm test` |
 | B03 | 5 秒 debounce、持續改動重設、最長等待強制 | 通過 | `npm test` |

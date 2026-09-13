@@ -14,9 +14,40 @@ export function describeAuthError(error){
  return `Google 登入未完成：${detail}`;
 }
 
-const REDIRECT_FLAG='kid-running-auth-redirect';
+export const ENABLE_INTENT_KEY='kid-running-enable-backup';
+export const REDIRECT_FLAG='kid-running-auth-redirect';
+const ENABLE_INTENT_TTL_MS=30*60*1000;
 
-export async function applyAuthPersistence(authMod,auth){
+export function writeEnableIntent(storage,now=Date.now()){
+ try{storage?.setItem?.(ENABLE_INTENT_KEY,String(now));}catch{/* 無 storage 時仍可嘗試登入 */}
+}
+
+export function clearEnableIntent(storage){
+ try{storage?.removeItem?.(ENABLE_INTENT_KEY);}catch{/* ignore */}
+}
+
+export function readEnableIntent(storage,now=Date.now(),ttl=ENABLE_INTENT_TTL_MS){
+ try{
+  const raw=storage?.getItem?.(ENABLE_INTENT_KEY);
+  if(!raw)return false;
+  if(raw==='1')return true;
+  const ts=Number(raw);
+  if(!Number.isFinite(ts))return true;
+  if(now-ts>ttl){
+   storage.removeItem?.(ENABLE_INTENT_KEY);
+   return false;
+  }
+  return true;
+ }catch{return false;}
+}
+
+export function shouldCompleteBackupEnable({user,backupEnabled=false,enableIntent=false}={}){
+ if(!user)return false;
+ if(backupEnabled===true)return Boolean(enableIntent);
+ return true;
+}
+
+async function applyPersistence(authMod,auth){
  const attempts=[
   ['indexedDB',authMod.indexedDBLocalPersistence],
   ['local',authMod.browserLocalPersistence]
@@ -31,13 +62,17 @@ export async function applyAuthPersistence(authMod,auth){
  return {ok:false,type:'none',longLived:false,error:lastError,message:persistenceUnavailableMessage()};
 }
 
+export const applyAuthPersistence=applyPersistence;
+
 export function createAuthService(deps){
  const {
   loadModules,
   resolveConfig,
   initFirebase,
   now=()=>Date.now(),
-  sessionStore=()=>globalThis.sessionStorage
+  sessionStore=()=>globalThis.sessionStorage,
+  delay=(fn,ms)=>setTimeout(fn,ms),
+  authStateTimeoutMs=2500
  }=deps;
 
  let ready=false;
@@ -49,14 +84,16 @@ export function createAuthService(deps){
  let loadError=null;
  let configInfo={configured:false,emulator:false,config:null};
  let redirectPending=false;
+ let fromRedirect=false;
  const listeners=new Set();
 
- function store(){
-  try{return typeof sessionStore==='function'?sessionStore():sessionStore;}
+ function asStore(value){
+  try{return typeof value==='function'?value():value;}
   catch{return null;}
  }
+ function store(){return asStore(sessionStore);}
  function markRedirectIntent(){
-  try{store()?.setItem?.(REDIRECT_FLAG,'1');}catch{/* 無 sessionStorage 時仍可嘗試 redirect */}
+  try{store()?.setItem?.(REDIRECT_FLAG,'1');}catch{/* ignore */}
  }
  function consumeRedirectIntent(){
   try{
@@ -73,11 +110,15 @@ export function createAuthService(deps){
   loadError=wrapped;
   return wrapped;
  }
+ function withResolver(method,args){
+  const resolver=modules.auth.browserPopupRedirectResolver;
+  return resolver?method(...args,resolver):method(...args);
+ }
 
  function emit(){for(const fn of listeners)fn(snapshot());}
  function snapshot(){
   return {
-   ready,resolving,user,persistence,loadError,configInfo,redirectPending,
+   ready,resolving,user,persistence,loadError,configInfo,redirectPending,fromRedirect,
    available:Boolean(modules&&firebase),
    configured:configInfo.configured,
    uid:user?.uid||null,
@@ -86,8 +127,34 @@ export function createAuthService(deps){
   };
  }
 
+ async function waitForAuthUser(existingUser){
+  await new Promise(resolve=>{
+   let unsub=()=>{};
+   let done=false;
+   const finish=()=>{
+    if(done)return;
+    done=true;
+    try{unsub();}catch{/* ignore */}
+    resolve();
+   };
+   unsub=modules.auth.onAuthStateChanged(firebase.auth,next=>{
+    if(next){
+     user=next;
+     loadError=null;
+     finish();
+     return;
+    }
+    if(!existingUser){
+     user=null;
+     finish();
+    }
+   });
+   if(existingUser)delay(finish,authStateTimeoutMs);
+  });
+ }
+
  async function start(){
-  resolving=true;emit();
+  resolving=true;fromRedirect=false;emit();
   try{
    configInfo=resolveConfig();
    if(!configInfo.configured){
@@ -95,12 +162,15 @@ export function createAuthService(deps){
    }
    modules=await loadModules();
    firebase=await initFirebase({modules,config:configInfo.config,emulator:configInfo.emulator});
-   persistence=await applyAuthPersistence(modules.auth,firebase.auth);
+   persistence=await applyPersistence(modules.auth,firebase.auth);
+   let redirectUser=null;
    if(modules.auth.getRedirectResult){
     try{
-     const redirected=await modules.auth.getRedirectResult(firebase.auth);
+     const redirected=await withResolver(modules.auth.getRedirectResult,[firebase.auth]);
      if(redirected?.user){
-      user=redirected.user;
+      redirectUser=redirected.user;
+      user=redirectUser;
+      fromRedirect=true;
       consumeRedirectIntent();
      }else if(consumeRedirectIntent()){
       rememberAuthError(null,{missingRedirect:true});
@@ -110,26 +180,25 @@ export function createAuthService(deps){
      rememberAuthError(error);
     }
    }
-   await new Promise(resolve=>{
-    let unsub=null;
-    let pending=false;
-    const finish=()=>{
-     if(unsub){const stop=unsub;unsub=null;stop();}
-     resolve();
-    };
-    unsub=modules.auth.onAuthStateChanged(firebase.auth,next=>{
-     user=next||null;
-     if(user)loadError=null;
-     ready=true;resolving=false;redirectPending=false;
-     emit();
-     if(unsub)finish();
-     else pending=true;
-    });
-    if(pending)finish();
-   });
+   await waitForAuthUser(redirectUser||user);
+   if(user){
+    loadError=null;
+    if(redirectUser)fromRedirect=true;
+   }
+   ready=true;resolving=false;redirectPending=false;
+   emit();
+   let ignoreInitialNull=Boolean(user);
    modules.auth.onAuthStateChanged(firebase.auth,next=>{
-    user=next||null;
-    if(user)loadError=null;
+    if(next){
+     user=next;
+     loadError=null;
+     ignoreInitialNull=false;
+    }else if(ignoreInitialNull){
+     ignoreInitialNull=false;
+    }else{
+     user=null;
+     fromRedirect=false;
+    }
     emit();
    });
   }catch(error){
@@ -145,18 +214,22 @@ export function createAuthService(deps){
   if(!firebase||!modules)throw Error(loadError?.message||'雲端備份元件尚未就緒，本機仍可記錄');
   if(!persistence.ok)throw Error(persistence.message||persistenceUnavailableMessage());
   loadError=null;
+  fromRedirect=false;
   const provider=new modules.auth.GoogleAuthProvider();
   provider.setCustomParameters({prompt:'select_account'});
+  markRedirectIntent();
   try{
-   const cred=await modules.auth.signInWithPopup(firebase.auth,provider);
-   user=cred.user;redirectPending=false;emit();
+   const cred=await withResolver(modules.auth.signInWithPopup,[firebase.auth,provider]);
+   consumeRedirectIntent();
+   user=cred.user;redirectPending=false;fromRedirect=false;emit();
    return {method:'popup',user};
   }catch(error){
    if(shouldFallbackToRedirect(error)){
     redirectPending=true;markRedirectIntent();emit();
-    await modules.auth.signInWithRedirect(firebase.auth,provider);
+    await withResolver(modules.auth.signInWithRedirect,[firebase.auth,provider]);
     return {method:'redirect',pending:true,fallback:true};
    }
+   consumeRedirectIntent();
    rememberAuthError(error);emit();
    throw error;
   }
@@ -164,7 +237,7 @@ export function createAuthService(deps){
 
  async function signOut(){
   if(firebase?.auth&&modules?.auth?.signOut)await modules.auth.signOut(firebase.auth);
-  user=null;emit();
+  user=null;fromRedirect=false;emit();
  }
 
  return {

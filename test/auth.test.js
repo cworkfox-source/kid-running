@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {applyAuthPersistence,persistenceUnavailableMessage,shouldFallbackToRedirect,describeAuthError,createAuthService} from '../auth.js';
+import {applyAuthPersistence,persistenceUnavailableMessage,shouldFallbackToRedirect,describeAuthError,createAuthService,shouldCompleteBackupEnable,writeEnableIntent,readEnableIntent,clearEnableIntent,ENABLE_INTENT_KEY} from '../auth.js';
 import {resolveFirebaseConfig,shouldUseEmulator,FIREBASE_SDK_VERSION} from '../firebase.js';
 import {describeBackupStatus} from '../backup.js';
 
@@ -19,7 +19,8 @@ function authHarness({
  redirectUser=null,
  authState,
  session,
- ua='Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
+ ua='Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+ authStateTimeoutMs=0
 }={}){
  const store=session||memoryStore();
  let popupCalls=0;
@@ -52,7 +53,7 @@ function authHarness({
   resolveConfig:()=>({configured:true,emulator:false,config:{authDomain:'kid-running.firebaseapp.com',projectId:'kid-running'}}),
   initFirebase:async()=>({auth:{},firestore:{}}),
   sessionStore:store,
-  userAgent:()=>ua
+  authStateTimeoutMs
  });
  return {service,store,popupCalls:()=>popupCalls,redirectCalls:()=>redirectCalls};
 }
@@ -138,6 +139,27 @@ test('預期 redirect 但結果為空時不可默默略過',async()=>{
  assert.equal(snap.available,true);
  assert.ok(snap.loadError);
  assert.match(String(snap.loadError.message),/重新導向沒有帶回登入結果/);
+});
+
+test('getRedirectResult 成功時即使第一次 auth 狀態是 null 也要留下 user',async()=>{
+ const redirectUser={uid:'u-redirect',email:'a@b.c',displayName:'A'};
+ const {service}=authHarness({redirectUser,authState:null,authStateTimeoutMs:0});
+ const snap=await service.start();
+ assert.equal(snap.fromRedirect,true);
+ assert.equal(snap.user?.uid,'u-redirect');
+ assert.equal(snap.loadError,null);
+});
+
+test('已拿到 user 且尚未 backupEnabled 時必須走啟用流程',()=>{
+ assert.equal(shouldCompleteBackupEnable({user:null,backupEnabled:false,enableIntent:true}),false);
+ assert.equal(shouldCompleteBackupEnable({user:{uid:'u1'},backupEnabled:false,enableIntent:false}),true);
+ assert.equal(shouldCompleteBackupEnable({user:{uid:'u1'},backupEnabled:true,enableIntent:false}),false);
+ assert.equal(shouldCompleteBackupEnable({user:{uid:'u1'},backupEnabled:true,enableIntent:true}),true);
+ const store=memoryStore();
+ writeEnableIntent(store,1);
+ assert.equal(readEnableIntent(store,1),true);
+ clearEnableIntent(store);
+ assert.equal(store.getItem(ENABLE_INTENT_KEY),null);
 });
 
 test('A02 啟動先解析 auth 設定，已設定仍不誤報雲端成功',()=>{

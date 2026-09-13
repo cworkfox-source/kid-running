@@ -212,5 +212,5 @@ try{
  if(page==='settings')await loadVersions();
  render();
  attachNetworkHooks();
- if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'}).catch(()=>toast('離線快取未啟用；請保持網路連線。'));
+ if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'}).then(reg=>reg.update().catch(()=>{})).catch(()=>toast('離線快取未啟用；請保持網路連線。'));
 }catch(e){$('#app').innerHTML=`<main class="card"><h1>無法開啟本機儲存空間</h1><p>${esc(e.message)}</p><p>請允許瀏覽器使用網站儲存空間，或改用一般瀏覽模式後重新整理。尚未寫入任何新紀錄。</p><button onclick="location.reload()">重新整理</button></main>`;}

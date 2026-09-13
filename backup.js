@@ -350,8 +350,8 @@ export function createBackupService(deps){
   currentUid=uid;
   retryTimer=clock.setTimeout(()=>{
    retryTimer=null;
-   if(canceled)return;
-   processQueue(uid).catch(()=>{});
+   if(canceled||!isOnline())return;
+   return processQueue(uid).catch(()=>{});
   },delay);
  }
 

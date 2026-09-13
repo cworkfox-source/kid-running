@@ -363,6 +363,21 @@ async function drain(n=40){
  for(let i=0;i<n;i++)await new Promise(r=>setImmediate(r));
 }
 
+async function settle(values){
+ await Promise.all((Array.isArray(values)?values:[values]).filter(Boolean).map(value=>Promise.resolve(value)));
+}
+
+async function waitUntil(predicate,{timeout=5000}={}){
+ const deadline=Date.now()+timeout;
+ let last;
+ while(Date.now()<=deadline){
+  last=await predicate();
+  if(last)return last;
+  await new Promise(r=>setTimeout(r,0));
+ }
+ return last;
+}
+
 test('非致命上傳失敗會用 clock.setTimeout 排程下次 processQueue',async()=>{
  const db=createMemoryDB();
  let putCalls=0;
@@ -388,8 +403,15 @@ test('非致命上傳失敗會用 clock.setTimeout 排程下次 processQueue',as
  await seedUser(db,{uid:'user-a',records:[sampleRecord('user-a')],enabled:true});
  const clock=createClock();
  const scheduled=[];
+ let timeoutFires=0;
  const rawSet=clock.setTimeout.bind(clock);
- clock.setTimeout=(fn,ms)=>{scheduled.push(ms);return rawSet(fn,ms);};
+ clock.setTimeout=(fn,ms)=>{
+  scheduled.push(ms);
+  return rawSet((...args)=>{
+   timeoutFires+=1;
+   return fn(...args);
+  },ms);
+ };
  const backup=service(db,cloud,user,{clock,randomId:()=>'retry-id'});
  const first=await backup.flush('user-a');
  assert.equal(first.ok,false);
@@ -401,17 +423,15 @@ test('非致命上傳失敗會用 clock.setTimeout 排程下次 processQueue',as
  const early=await backup.checkQueue('user-a');
  assert.equal(early.reason,'wait-retry');
  assert.equal(putCalls,1);
- clock.advance(Math.max(0,queued.nextRetryAt-clock.now()-1));
+ const firesBeforeDue=timeoutFires;
+ await settle(clock.advance(Math.max(0,queued.nextRetryAt-clock.now()-1)));
  await drain();
+ assert.equal(timeoutFires,firesBeforeDue,'尚未到 nextRetryAt 不應觸發 timeout');
  assert.equal(putCalls,1,'尚未到 nextRetryAt 不應重試');
- clock.advance(2);
- let backups=[];
- for(let i=0;i<120;i++){
-  await new Promise(r=>setImmediate(r));
-  backups=await inner.listBackups('user-a','device-test-1');
-  if(backups[0]?.status==='complete')break;
- }
+ await settle(clock.advance(Math.max(1,queued.nextRetryAt-clock.now()+1)));
+ assert.ok(timeoutFires>firesBeforeDue,'到期後 clock.setTimeout 回呼必須執行');
  assert.ok(putCalls>=2,'到期後應再呼叫 processQueue／上傳');
+ const backups=await inner.listBackups('user-a','device-test-1');
  assert.equal(backups[0]?.status,'complete');
  assert.equal(backups[0].backupId,'retry-id');
 });

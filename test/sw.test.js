@@ -9,7 +9,7 @@ const app=await readFile(new URL('../app.js',import.meta.url),'utf8');
 test('CACHE 至少為 kid-running-v4',()=>{
  const match=sw.match(/CACHE\s*=\s*'kid-running-v(\d+)'/);
  assert.ok(match,'sw.js 必須宣告 CACHE');
- assert.ok(Number(match[1])>=8,`CACHE 應 ≥ v8，實際 v${match[1]}`);
+ assert.ok(Number(match[1])>=9,`CACHE 應 ≥ v9，實際 v${match[1]}`);
 });
 
 test('install 會 skipWaiting，activate 會清舊快取並 claim',()=>{

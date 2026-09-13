@@ -108,3 +108,11 @@ test('非 stub 的 child_01 被占用時，帳號紀錄改掛到自己的小孩'
  assert.equal(after.child.ownerUid,'user-a');
 });
 
+
+test('跨帳號還原遇到相同紀錄 ID 時會重新編號，不覆寫既有紀錄',()=>{
+ const payload={children:[{id:'child_01',name:'小明',birthday:null}],records:[run(7.42,'2026-09-13','same-id')]};
+ const remapped=remapBackupChildIds(payload,'user-a',new Set(),new Set(['same-id']));
+ assert.notEqual(remapped.records[0].id,'same-id');
+ assert.match(remapped.records[0].id,/same-id__user-a/);
+ assert.equal(remapped.records[0].childId,defaultChildId('user-a'));
+});

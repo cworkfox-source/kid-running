@@ -49,6 +49,14 @@ service cloud.firestore {
         && request.resource.data[field].size() > 0
         && request.resource.data[field].size() <= 128;
     }
+    function countInitialize(uid) {
+      return !resource.data.keys().hasAny(['completeCount'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['completeCount','completeCountInitializedAt'])
+        && request.resource.data.completeCount is int
+        && request.resource.data.completeCount >= 0
+        && request.resource.data.completeCount <= 10
+        && request.resource.data.completeCountInitializedAt == request.time;
+    }
     function countBump(uid) {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['completeCount','lastCompletedBackupId','lastCompletedDeviceId'])
         && request.resource.data.completeCount is int
@@ -80,18 +88,25 @@ service cloud.firestore {
         && getAfter(userPath(uid)).data.lastBackupAt == request.time
         && getAfter(userPath(uid)).data.lastBackupId == backupId;
     }
+    function validSummary() {
+      return request.resource.data.summary.keys().hasOnly(['latestDate','recordCount','childCount'])
+        && request.resource.data.summary.recordCount == request.resource.data.recordCount
+        && request.resource.data.summary.childCount == request.resource.data.childCount
+        && (request.resource.data.summary.latestDate == null
+          || (request.resource.data.summary.latestDate is string && request.resource.data.summary.latestDate.size() == 10));
+    }
     function validBackupCreate(uid,deviceId,backupId) {
       return request.resource.data.keys().hasOnly(['schemaVersion','backupId','uid','deviceId','localRevision','contentHash','recordCount','childCount','chunkCount','status','summary','createdAt'])
         && request.resource.data.schemaVersion == 1 && request.resource.data.uid == uid && request.resource.data.deviceId == deviceId && request.resource.data.backupId == backupId
         && request.resource.data.localRevision is int && request.resource.data.localRevision >= 0 && request.resource.data.contentHash is string && request.resource.data.contentHash.matches('^[0-9a-f]{64}$')
         && request.resource.data.recordCount is int && request.resource.data.recordCount >= 0 && request.resource.data.recordCount <= 3000 && request.resource.data.childCount is int && request.resource.data.childCount >= 0 && request.resource.data.childCount <= 20
-        && request.resource.data.chunkCount is int && request.resource.data.chunkCount >= 1 && request.resource.data.chunkCount <= 4 && request.resource.data.status == 'uploading' && request.resource.data.summary is map && request.resource.data.createdAt == request.time && freshBackupClock(uid,backupId);
+        && request.resource.data.chunkCount is int && request.resource.data.chunkCount >= 1 && request.resource.data.chunkCount <= 4 && request.resource.data.status == 'uploading' && request.resource.data.summary is map && validSummary() && request.resource.data.createdAt == request.time && freshBackupClock(uid,backupId);
     }
 
     match /users/{uid} {
       allow read: if isOwner(uid);
       allow create: if isOwner(uid) && (clockCreate(uid) || clockCreateNoCount(uid));
-      allow update: if isOwner(uid) && (clockUpdate(uid) || countBump(uid) || countDrop(uid));
+      allow update: if isOwner(uid) && (clockUpdate(uid) || countInitialize(uid) || countBump(uid) || countDrop(uid));
       allow delete: if false;
 
       match /devices/{deviceId} {
@@ -111,6 +126,9 @@ service cloud.firestore {
             && getAfter(userPath(uid)).data.lastCompletedDeviceId == deviceId;
           allow delete: if isOwner(uid) && (
             (resource.data.status != 'complete' && countAfter(uid) == countNow(uid))
+            || (resource.data.status == 'complete'
+              && !get(userPath(uid)).data.keys().hasAny(['completeCount'])
+              && countAfter(uid) == countNow(uid))
             || (resource.data.status == 'complete'
               && countAfter(uid) == countNow(uid) - 1
               && countAfter(uid) >= 0

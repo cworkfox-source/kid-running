@@ -12,7 +12,7 @@ let records=[],children=[],settings=[],page='home',distance=30,filter='all',prev
 let analysisStart='',analysisEnd='',analysisDay=today(),analysisMetric='seconds';
 let draft={date:today(),distance:30,seconds:'',note:'',startType:'',surface:'',timingMethod:''};
 let appMeta=null,accountState=null,authUser=null,authInfo={ready:false,resolving:true,configured:false,available:false,persistence:{ok:true,longLived:true}},cloud=null,backupService=null,authService=null,tabId='tab',versions=[],restoreOffer=null,online=typeof navigator==='undefined'?true:navigator.onLine!==false,statusExtra={};
-let versionsQuery={status:'idle',versions:[],error:null},versionsUid=null,versionsLoading=false,selectedRestore=null,exportFallback=null,lastSuccessKey='';
+let versionsQuery={status:'idle',versions:[],error:null},versionsUid=null,versionsLoading=false,selectedRestore=null,exportFallback=null,lastSuccessKey='',localStorageReady=false,replacingData=false;
 const ownerId=()=>authUser?.uid||LOCAL_OWNER;
 const scopedChildren=()=>children.filter(c=>sameOwner(c,ownerId()));
 const scopedRecords=()=>records.filter(r=>sameOwner(r,ownerId()));
@@ -135,7 +135,25 @@ async function ensureChild(){
 }
 async function safe(fn){if(busy)return;busy=true;try{await fn();}catch(e){toast(`未完成：${e.message}。資料未成功儲存時請勿關閉頁面。`);}finally{busy=false;}}
 function makeRecord(r,index=0){const time=new Date(Date.now()+index).toISOString();return {...r,id:crypto.randomUUID(),childId:active().id,ownerUid:ownerId(),createdAt:time,updatedAt:time};}
-async function writeLocal(changes){await write(changes.map(c=>c.value&&(c.store==='records'||c.store==='children')?{...c,value:{...c.value,ownerUid:ownerId()}}:c),{bumpRevision:true,ownerUid:ownerId()});if(backupService&&authUser&&accountState?.backupEnabled)backupService.noteLocalChange(ownerId());}
+async function writeLocal(changes){await write(changes.map(c=>c.value&&(c.store==='records'||c.store==='children')?{...c,value:{...c.value,ownerUid:ownerId()}}:c),{bumpRevision:true,ownerUid:ownerId()});if(!replacingData&&backupService&&authUser&&accountState?.backupEnabled)backupService.noteLocalChange(ownerId());}
+async function replaceLocalData(task){
+ const uid=ownerId();
+ const shouldResume=Boolean(authUser&&backupService);
+ if(shouldResume){
+  const stopped=await backupService.stopForReplacement();
+  if(!stopped)throw Error('備份工作尚未停止，請稍後再試還原');
+  await backupService.discardQueuedSnapshots(uid);
+ }
+ replacingData=true;
+ try{return await task();}
+ finally{
+  replacingData=false;
+  if(shouldResume){
+   backupService.resetCancel();
+   backupService.noteLocalChange(uid).catch(error=>toast(`資料已存本機，雲端備份稍後重試：${error.message||error}`));
+  }
+ }
+}
 async function saveRecords(incoming){const candidate=[...records];for(const r of incoming){validate(r);const notes=warnings(r,candidate);if(notes.length&&!confirm(notes.join('\n')+'\n\n確認保留原數值並繼續？'))return false;candidate.push(r);}await writeLocal(incoming.map(value=>({store:'records',value})));await refresh();return true;}
 async function setSetting(id,value){if(id==='reverse'){await writeLocal([{store:'settings',value:{id:`reverse:${ownerId()}`,value,ownerUid:ownerId()}}]);settings=await all('settings');return;}await write([{store:'settings',value:{id,value}}]);settings=await all('settings');}
 function clearRestoreList(){versions=[];versionsQuery={status:authUser?'loading':'signed-out',versions:[],error:null};versionsUid=authUser?.uid||null;selectedRestore=null;}
@@ -262,7 +280,7 @@ async function handleRestore(version){
   }
  }
  try{
-  await restoreVersion({db:{all,write,getAccount,putAccount,saveRestoreSnapshot},cloud,uid:authUser.uid,version});
+  await replaceLocalData(()=>restoreVersion({db:{all,write,getAccount,putAccount,saveRestoreSnapshot},cloud,uid:authUser.uid,version}));
  }catch(error){
   await refresh();
   toast(`還原未完成：${error.message||error}。本機資料未被刪除。`);
@@ -308,7 +326,7 @@ function bind(){document.querySelectorAll('[data-page]').forEach(b=>b.onclick=()
  $('#copy-export-content')?.addEventListener('click',()=>safe(async()=>{const text=exportFallback?.content||$('#export-fallback-text')?.value||'';if(!text)return;if(navigator.clipboard?.writeText)await navigator.clipboard.writeText(text);else{const box=$('#export-fallback-text');if(box){box.focus();box.select();document.execCommand('copy');}}toast('已複製內容，請自行貼上存檔');}));
  $('#show-export-fallback')?.addEventListener('click',()=>{if(exportFallback)exportFallback={...exportFallback,expanded:true};render();});
  $('#dismiss-export-fallback')?.addEventListener('click',()=>{exportFallback=null;render();});
- $('#import-json')?.addEventListener('change',e=>safe(async()=>{backup=null;$('#backup-preview').innerHTML='';const file=e.target.files[0];if(!file)return;if(file.size>10*1024*1024)throw Error('備份檔請小於 10 MB');backup=validateBackup(JSON.parse(await file.text()));$('#backup-preview').innerHTML=`<div class="notice"><strong>有效備份：${backup.records.length} 筆紀錄、${backup.children.length} 位小孩</strong><p>將取代目前這個帳號的 ${scopedRecords().length} 筆紀錄。建議先匯出目前資料。其他 Google 帳號在本機的資料不受影響。</p><button id="restore" class="primary">確認取代並還原</button></div>`;$('#restore').onclick=()=>safe(async()=>{if(!confirm('確定以備份取代目前帳號的本機紀錄、名字與必要偏好？\n未備份的現有資料將無法復原。'))return;const b=backup;if(!b.children.length)throw Error('備份至少需有一位小孩');const owner=ownerId();const existingChildren=children.filter(c=>sameOwner(c,owner));const existingRecords=records.filter(r=>sameOwner(r,owner));const reverseId=`reverse:${owner}`;const deletes=[...existingRecords.map(r=>({store:'records',delete:r.id})),...existingChildren.map(c=>({store:'children',delete:c.id})),...(settings.find(s=>s.id===reverseId)?[{store:'settings',delete:reverseId}]:[])];const importedReverse=(Array.isArray(b.settings)?b.settings:[]).find(s=>s.id==='reverse'&&typeof s.value==='boolean');const safeSettings=(Array.isArray(b.settings)?b.settings:[]).filter(s=>(s.id==='distance'&&typeof s.value==='number'&&s.value>0&&Number.isFinite(s.value)));const occupied=new Set(children.filter(c=>!sameOwner(c,owner)).map(c=>c.id));const remapped=remapBackupChildIds(b,owner,occupied);await writeLocal([...deletes,...remapped.records.map(value=>({store:'records',value:{...value,ownerUid:owner}})),...remapped.children.map(value=>({store:'children',value:{...value,ownerUid:owner}})),...safeSettings.map(value=>({store:'settings',value})),...(importedReverse?[{store:'settings',value:{id:reverseId,value:importedReverse.value,ownerUid:owner}}]:[])]);await refresh();distance=settings.find(s=>s.id==='distance')?.value||30;draft={date:today(),distance,seconds:'',note:'',startType:'',surface:'',timingMethod:''};editing=null;preview=[];backup=null;render();toast('備份已還原，原本機這個帳號的資料已被取代。');});}));
+ $('#import-json')?.addEventListener('change',e=>safe(async()=>{backup=null;$('#backup-preview').innerHTML='';const file=e.target.files[0];if(!file)return;if(file.size>10*1024*1024)throw Error('備份檔請小於 10 MB');backup=validateBackup(JSON.parse(await file.text()));$('#backup-preview').innerHTML=`<div class="notice"><strong>有效備份：${backup.records.length} 筆紀錄、${backup.children.length} 位小孩</strong><p>將取代目前這個帳號的 ${scopedRecords().length} 筆紀錄。建議先匯出目前資料。其他 Google 帳號在本機的資料不受影響。</p><button id="restore" class="primary">確認取代並還原</button></div>`;$('#restore').onclick=()=>safe(async()=>{if(!confirm('確定以備份取代目前帳號的本機紀錄、名字與必要偏好？\n未備份的現有資料將無法復原。'))return;const b=backup;if(!b.children.length)throw Error('備份至少需有一位小孩');const owner=ownerId();const existingChildren=children.filter(c=>sameOwner(c,owner));const existingRecords=records.filter(r=>sameOwner(r,owner));const reverseId=`reverse:${owner}`;const deletes=[...existingRecords.map(r=>({store:'records',delete:r.id})),...existingChildren.map(c=>({store:'children',delete:c.id})),...(settings.find(s=>s.id===reverseId)?[{store:'settings',delete:reverseId}]:[])];const importedReverse=(Array.isArray(b.settings)?b.settings:[]).find(s=>s.id==='reverse'&&typeof s.value==='boolean');const safeSettings=(Array.isArray(b.settings)?b.settings:[]).filter(s=>(s.id==='distance'&&typeof s.value==='number'&&s.value>0&&Number.isFinite(s.value)));const occupied=new Set(children.filter(c=>!sameOwner(c,owner)).map(c=>c.id));const occupiedRecords=new Set(records.filter(r=>!sameOwner(r,owner)).map(r=>r.id));const remapped=remapBackupChildIds(b,owner,occupied,occupiedRecords);await replaceLocalData(()=>writeLocal([...deletes,...remapped.records.map(value=>({store:'records',value:{...value,ownerUid:owner}})),...remapped.children.map(value=>({store:'children',value:{...value,ownerUid:owner}})),...safeSettings.map(value=>({store:'settings',value})),...(importedReverse?[{store:'settings',value:{id:reverseId,value:importedReverse.value,ownerUid:owner}}]:[])]));await refresh();distance=settings.find(s=>s.id==='distance')?.value||30;draft={date:today(),distance,seconds:'',note:'',startType:'',surface:'',timingMethod:''};editing=null;preview=[];backup=null;render();toast('備份已還原，原本機這個帳號的資料已被取代。');});}));
  bindBackupUi();
 }
 function bindPreview(){if($('#paste')){$('#paste').value=pasteDraft;$('#paste').oninput=e=>{pasteDraft=e.target.value;preview=[];$('#preview').innerHTML='';};}document.querySelectorAll('[data-preview]').forEach(input=>input.oninput=()=>{preview[Number(input.dataset.preview)].record[input.dataset.field]=input.dataset.field==='date'?input.value:Number(input.value);});$('#confirm-import')?.addEventListener('click',()=>safe(async()=>{if(preview.some(x=>x.error)||!preview.length)return;const incoming=preview.map((p,i)=>makeRecord(validate(p.record),i));if(!await saveRecords(incoming))return;preview=[];pasteDraft='';capture();render();toast(`已匯入 ${incoming.length} 筆紀錄`);}));}
@@ -319,6 +337,7 @@ function attachNetworkHooks(){
 }
 try{
  await openDB();
+ localStorageReady=true;
  appMeta=await ensureAppMeta();
  try{tabId=sessionStorage.getItem('kid-running-tab')||crypto.randomUUID();sessionStorage.setItem('kid-running-tab',tabId);}catch{tabId=crypto.randomUUID();}
  const localConfig=await loadLocalFirebaseConfig();
@@ -379,7 +398,7 @@ try{
    backupEnabled:Boolean(acc.backupEnabled),
    enableIntent:hasEnableIntent()
   }))await finishEnable();
-  else if(acc.backupEnabled)await backupService.checkQueue(authUser.uid);
+  else if(acc.backupEnabled)void backupService.checkQueue(authUser.uid).catch(error=>toast(`資料已存本機，雲端備份稍後重試：${error.message||error}`));
  }
  await refresh();await ensureChild();
  const route=location.hash.slice(1);if(['home','records','analysis','settings'].includes(route))page=route;
@@ -387,4 +406,8 @@ try{
  render();
  attachNetworkHooks();
  if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'}).then(reg=>reg.update().catch(()=>{})).catch(()=>toast('離線快取未啟用；請保持網路連線。'));
-}catch(e){$('#app').innerHTML=`<main class="card"><h1>無法開啟本機儲存空間</h1><p>${esc(e.message)}</p><p>請允許瀏覽器使用網站儲存空間，或改用一般瀏覽模式後重新整理。尚未寫入任何新紀錄。</p><button onclick="location.reload()">重新整理</button></main>`;}
+}catch(e){
+ const title=localStorageReady?'網站啟動未完成':'無法開啟本機儲存空間';
+ const message=localStorageReady?'本機資料沒有因這個錯誤被清除。請重新整理；若持續發生，請保留錯誤訊息並聯絡管理者。':'請允許瀏覽器使用網站儲存空間，或改用一般瀏覽模式後重新整理。尚未寫入任何新紀錄。';
+ $('#app').innerHTML=`<main class="card"><h1>${title}</h1><p>${esc(e.message)}</p><p>${message}</p><button onclick="location.reload()">重新整理</button></main>`;
+}

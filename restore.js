@@ -123,7 +123,8 @@ export async function restoreVersion({db,cloud,uid,version,settings,sha=sha256})
  const reverse=allSettings.find(s=>s.id===reverseId);
  if(reverse)changes.push({store:'settings',delete:reverseId});
  const occupied=new Set(children.filter(c=>!sameOwner(c,uid)).map(c=>c.id));
- const remapped=remapBackupChildIds(payload,uid,occupied);
+ const occupiedRecords=new Set(records.filter(r=>!sameOwner(r,uid)).map(r=>r.id));
+ const remapped=remapBackupChildIds(payload,uid,occupied,occupiedRecords);
  for(const child of remapped.children){
   changes.push({store:'children',value:{...child,ownerUid:uid}});
  }

@@ -38,7 +38,11 @@ npm test
 
 ## 靜態部署
 
-將 `index.html`、`styles.css`、`app.js`、`core.js`、`db.js`、`sw.js` 放在同一目錄，即可放到 HTTPS 靜態網站服務（含子目錄）。無建置步驟。`server.js` 僅供本機測試，不是線上帳號或資料伺服器。
+公開網站：https://cworkfox-source.github.io/kid-running/
+
+GitHub Actions 會把 `index.html`、`styles.css`、`app.js`、`core.js`、`db.js`、`sw.js` 發到 GitHub Pages（無建置步驟）。資產路徑皆為相對路徑，可在專案子目錄下運作。`server.js` 僅供本機測試，不會上線。
+
+首次啟用請到倉庫 **Settings → Pages → Build and deployment → Source** 選 **GitHub Actions**。若第一次 workflow 在開啟 Pages 前失敗，改完設定後到 **Actions** 重新執行 **Deploy static content to Pages**。
 
 每次更新前端須同步提高 `sw.js` 的 CACHE 版本；新快取下載完成且舊分頁關閉後生效。不提供安裝 UI。離線功能需首次成功載入、Service Worker 完成安裝後才能使用；行動裝置經區網 HTTP 不支援 Service Worker，請用 HTTPS 測試。
 

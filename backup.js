@@ -67,6 +67,7 @@ export function createBackupService(deps){
 
  let debounceTimer=null;
  let forceTimer=null;
+ let retryTimer=null;
  let forceStartedAt=0;
  let canceled=false;
  let uploading=false;
@@ -253,6 +254,7 @@ export function createBackupService(deps){
     if(!queue.length){
      const made=await enqueueCurrent(uid,{ignorePause});
      if(!made?.item){
+      clearRetryTimer();
       emit({uploading:false,pending:false,dirty:false,waitingFirst:Boolean(made?.waitingFirst),lastSuccess:(await account(uid)).lastSuccess});
       return {ok:true,unchanged:Boolean(made?.unchanged),waitingFirst:Boolean(made?.waitingFirst),completed:lastCompleted};
      }
@@ -261,6 +263,8 @@ export function createBackupService(deps){
     const item=queue[0];
     if(item.nextRetryAt&&item.nextRetryAt>clock.now()){
      emit({uploading:false,pending:true});
+     if(!canceled&&isOnline())scheduleRetry(uid,item.nextRetryAt);
+     else clearRetryTimer();
      return {ok:false,reason:'wait-retry',completed:lastCompleted};
     }
     const working={...item,status:'uploading'};
@@ -288,6 +292,7 @@ export function createBackupService(deps){
       }
      });
      if(!stillPending){
+      clearRetryTimer();
       emit({uploading:false,pending:false,dirty:false,lastSuccess:(await account(uid)).lastSuccess});
       return {ok:true,completed:lastCompleted};
      }
@@ -306,7 +311,12 @@ export function createBackupService(deps){
      const fresh=await account(uid);
      await db.putAccount({...fresh,lastError:failed.lastError});
      emit({uploading:false,pending:true,lastError:failed.lastError,fatalKind:classified.kind});
-     if(classified.fatal)return {ok:false,fatal:true,error};
+     if(classified.fatal||canceled||!isOnline()){
+      clearRetryTimer();
+      if(classified.fatal)return {ok:false,fatal:true,error};
+      return {ok:false,reason:canceled?'canceled':'offline',error};
+     }
+     scheduleRetry(uid,failed.nextRetryAt);
      return {ok:false,error};
     }
    }
@@ -319,6 +329,7 @@ export function createBackupService(deps){
     lastSuccess:accNow.lastSuccess,
     waitingFirst:accNow.waitingFirstRecord&&latest.recordCount===0
    });
+   if(!accNow.pendingBackup)clearRetryTimer();
    return {ok:true,completed:lastCompleted};
   }finally{
    uploading=false;
@@ -326,9 +337,28 @@ export function createBackupService(deps){
   }
  }
 
+ function clearRetryTimer(){
+  if(retryTimer)clock.clearTimeout(retryTimer);
+  retryTimer=null;
+ }
+
+ function scheduleRetry(uid,nextRetryAt){
+  if(canceled||!uid)return;
+  if(!Number.isFinite(nextRetryAt)||nextRetryAt>=Number.MAX_SAFE_INTEGER)return;
+  const delay=Math.max(0,nextRetryAt-clock.now());
+  clearRetryTimer();
+  currentUid=uid;
+  retryTimer=clock.setTimeout(()=>{
+   retryTimer=null;
+   if(canceled)return;
+   processQueue(uid).catch(()=>{});
+  },delay);
+ }
+
  function clearTimers(){
   if(debounceTimer)clock.clearTimeout(debounceTimer);
   if(forceTimer)clock.clearTimeout(forceTimer);
+  clearRetryTimer();
   debounceTimer=null;forceTimer=null;forceStartedAt=0;
  }
 

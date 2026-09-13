@@ -359,6 +359,63 @@ test('啟用時本機空雲端有則要求還原，不覆蓋',async()=>{
  assert.equal((await cloud.getBackup('user-a','other','c1')).recordCount,4);
 });
 
+async function drain(n=40){
+ for(let i=0;i<n;i++)await new Promise(r=>setImmediate(r));
+}
+
+test('非致命上傳失敗會用 clock.setTimeout 排程下次 processQueue',async()=>{
+ const db=createMemoryDB();
+ let putCalls=0;
+ let fails=1;
+ const inner=createMemoryCloud();
+ const cloud={
+  ...inner,
+  async putBackup(...args){
+   putCalls+=1;
+   if(fails>0){fails-=1;throw Object.assign(Error('network'),{code:'unavailable'});}
+   return inner.putBackup(...args);
+  },
+  putChunk:(...a)=>inner.putChunk(...a),
+  getBackup:(...a)=>inner.getBackup(...a),
+  listChunks:(...a)=>inner.listChunks(...a),
+  completeBackup:(...a)=>inner.completeBackup(...a),
+  updateDevice:(...a)=>inner.updateDevice(...a),
+  listDevices:(...a)=>inner.listDevices(...a),
+  listBackups:(...a)=>inner.listBackups(...a),
+  deleteBackupTree:(...a)=>inner.deleteBackupTree(...a)
+ };
+ const user={uid:'user-a'};
+ await seedUser(db,{uid:'user-a',records:[sampleRecord('user-a')],enabled:true});
+ const clock=createClock();
+ const scheduled=[];
+ const rawSet=clock.setTimeout.bind(clock);
+ clock.setTimeout=(fn,ms)=>{scheduled.push(ms);return rawSet(fn,ms);};
+ const backup=service(db,cloud,user,{clock,randomId:()=>'retry-id'});
+ const first=await backup.flush('user-a');
+ assert.equal(first.ok,false);
+ assert.equal(putCalls,1);
+ const queued=(await db.all('backupQueue'))[0];
+ assert.equal(queued.status,'queued');
+ assert.ok(queued.nextRetryAt>clock.now());
+ assert.ok(scheduled.some(ms=>ms===queued.nextRetryAt-clock.now()));
+ const early=await backup.checkQueue('user-a');
+ assert.equal(early.reason,'wait-retry');
+ assert.equal(putCalls,1);
+ clock.advance(Math.max(0,queued.nextRetryAt-clock.now()-1));
+ await drain();
+ assert.equal(putCalls,1,'尚未到 nextRetryAt 不應重試');
+ clock.advance(2);
+ let backups=[];
+ for(let i=0;i<120;i++){
+  await new Promise(r=>setImmediate(r));
+  backups=await inner.listBackups('user-a','device-test-1');
+  if(backups[0]?.status==='complete')break;
+ }
+ assert.ok(putCalls>=2,'到期後應再呼叫 processQueue／上傳');
+ assert.equal(backups[0]?.status,'complete');
+ assert.equal(backups[0].backupId,'retry-id');
+});
+
 test('U01 SDK 失敗時狀態不顯示已備份，本機資料仍在',async()=>{
  const db=createMemoryDB();
  await seedUser(db,{uid:LOCAL_OWNER,records:[sampleRecord(LOCAL_OWNER)],enabled:false});

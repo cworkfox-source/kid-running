@@ -46,13 +46,13 @@ npm run test:emulator
 - 所有權以 Firebase `uid` 為準，不用顯示名稱或 email。
 - 變更（成績增刪改、複製後確認新增、批次匯入、JSON 還原、小孩名稱、需跨機的顯示偏好）以遞增 revision + 穩定序列化 SHA-256 判斷，不靠筆數。速度／PB／進步率等衍生值不備份。
 - 本機交易成功後約 5 秒 debounce，持續改動會重設，最長約 30 秒強制嘗試；「立即備份」略過等待。內容沒變不會再建立成功版本。
-- 待備份佇列寫在 IndexedDB，斷線或重開後補傳。成功只在伺服器確認 `complete` 且塊數／摘要核對通過後才顯示「已備份」。`online` 事件只會檢查佇列。
+- 待備份佇列寫在 IndexedDB，斷線或重開後補傳；非致命上傳失敗會依退避在 `nextRetryAt` 自動再試，不必只靠重開或切回前景。成功只在伺服器確認 `complete` 且塊數／摘要核對通過後才顯示「已備份」。`online` 事件只會檢查佇列。
 - 雲端路徑：`users/{uid}/devices/{deviceId}/backups/{backupId}`，內容分塊（≤256 KiB）在 `chunks` 子集合。每裝置保留最近 30 個**成功**版本；完成的版本不可改。
 - 換機：登入同一帳號 → 選成功版本（標來源裝置）→ 預覽後確認取代本機該帳號資料。這是選版取代，不是合併，也不會覆寫其他裝置既有雲端版本。
 - 可暫停自動備份：仍追蹤變更，恢復後補傳最新快照。
 - 不含：Google Drive、匿名驗證、跨裝置即時同步、自動合併、家庭共編、排程背景執行、給一般使用者的 Firebase 管理介面。
 
-### Firebase 專案現況（本 PR 不 deploy 規則／Hosting、不升 Blaze）
+### Firebase 專案現況（不把密鑰放進倉庫、不 deploy Hosting、不升 Blaze）
 
 Web config 可以公開，不是密鑰；真正保護靠 Auth + `firestore.rules`。請**不要**把 service account 私鑰或 OAuth client secret 放進倉庫或前端。`firebase-config.js` 已填入專案 `kid-running` 的公開 Web 設定。
 
@@ -62,10 +62,10 @@ Web config 可以公開，不是密鑰；真正保護靠 Auth + `firestore.rules
 | Google provider | 已啟用 |
 | 授權網域 | `localhost`、`cworkfox-source.github.io` |
 | Firestore | `(default)`，區域 `asia-east1` |
-| 正式 `firestore.rules` | **尚未部署**（依紅線，本 PR 不會代為 deploy） |
+| 正式 `firestore.rules` | **已部署**到 `kid-running`（ruleset `2bad0407-6adf-4732-be9f-c94b6b0029ad`；Rules test 4/4 SUCCESS；未登入 REST 寫入 → 403 `PERMISSION_DENIED`）。GitHub Actions **不會**自動部署規則；此次為手動／MCP 部署 |
 | Auth domain | `kid-running.firebaseapp.com` |
 
-本機 Emulator：`http://localhost:3000/?emulator=1`。規則測試用別名 `demo-kid-running`（見 `.firebaserc` 的 `emulator`）。iPhone Safari 會優先走 redirect。
+本機 Emulator：`http://localhost:3000/?emulator=1`。規則測試用別名 `demo-kid-running`（見 `.firebaserc` 的 `emulator`）。Google 登入一律先 `signInWithPopup`（含 iPhone／Safari）；僅在 popup 被擋或不支援時才 fallback `signInWithRedirect`。
 
 Firebase JS SDK 釘死 **11.1.0**，由 CDN 載入。CDN 暫時失敗時本機頁面仍可記錄，只是雲端備份不可用。
 
@@ -87,7 +87,7 @@ GitHub Actions 會把靜態檔（含 auth/backup/restore/firebase/cloud 模組�
 
 首次啟用請到倉庫 **Settings → Pages → Build and deployment → Source** 選 **GitHub Actions**。若第一次 workflow 在開啟 Pages 前失敗，改完設定後到 **Actions** 重新執行 **Deploy static content to Pages**。
 
-每次更新前端須同步提高 `sw.js` 的 CACHE 版本（目前 `kid-running-v4`）。新 SW 安裝時會 `skipWaiting()`，啟用時刪除舊的 `kid-running-*` 快取並 `clients.claim()`；導覽／HTML 與 `app.js` 採 network-first（離線才回退快取），一般重新整理即可拿到新頁面，不必手動清除網站資料。不提供安裝 UI。離線功能需首次成功載入、Service Worker 完成安裝後才能使用；行動裝置經區網 HTTP 不支援 Service Worker，請用 HTTPS 測試。
+每次更新前端須同步提高 `sw.js` 的 CACHE 版本（目前 `kid-running-v5`）。新 SW 安裝時會 `skipWaiting()`，啟用時刪除舊的 `kid-running-*` 快取並 `clients.claim()`；導覽／HTML 與 `app.js` 採 network-first（離線才回退快取），一般重新整理即可拿到新頁面，不必手動清除網站資料。不提供安裝 UI。離線功能需首次成功載入、Service Worker 完成安裝後才能使用；行動裝置經區網 HTTP 不支援 Service Worker，請用 HTTPS 測試。
 
 ## 注意
 
@@ -95,6 +95,6 @@ GitHub Actions 會把靜態檔（含 auth/backup/restore/firebase/cloud 模組�
 
 ## 驗證狀態
 
-見 `test/ACCEPTANCE.md`。`npm test` 含核心解析／備份狀態機／帳號隔離。Firestore Emulator 規則與實際上傳／還原見 `npm run test:emulator`。正式 rules 尚未部署，故對正式 Firestore 的寫入在規則生效前不可當成已上線。
+見 `test/ACCEPTANCE.md`。`npm test` 含核心解析／備份狀態機／帳號隔離。Firestore Emulator 規則與實際上傳／還原見 `npm run test:emulator`。正式 `firestore.rules` 已部署到 `kid-running`（見上方 ruleset 證據）；GitHub Actions 仍不會自動部署規則。
 
 `scripts/browser-check.mjs` 包含手機新增／編輯／刪除／複製、預覽不入庫、PB、重新載入、JSON 還原、無效檔案、320–1280px 溢出、離線重開及新增的瀏覽器測試。iPhone Safari 真機登入持久請見驗收表 U02。

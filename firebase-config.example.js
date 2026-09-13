@@ -5,7 +5,8 @@
  *
  * 正式環境現況：專案 kid-running、Google provider 已啟用、
  * 授權網域含 localhost 與 cworkfox-source.github.io、
- * Firestore (default) 在 asia-east1。firestore.rules 仍須管理者自行部署（本倉庫不 deploy 正式環境）。
+ * Firestore (default) 在 asia-east1。正式 firestore.rules 已部署到 kid-running
+ * （手動／MCP，GitHub Actions 不會自動部署規則）。本倉庫不 deploy Firebase Hosting。
  *
  * 本機 Emulator：http://localhost:3000/?emulator=1
  * `.firebaserc` 的 emulator 別名是 demo-kid-running；`npm run test:emulator` 使用該 demo ID，不必登入正式專案。

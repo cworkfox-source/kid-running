@@ -25,7 +25,7 @@ function distanceSelect(){return `<label class="filter-label">測試距離<selec
 function statusView(){
  const acc=accountState||{};
  return describeBackupStatus({
-  sdkFailed:Boolean(authInfo.configured&&authInfo.loadError),
+  sdkFailed:Boolean(authInfo.configured&&authInfo.loadError&&!authInfo.available),
   configured:Boolean(authInfo.configured),
   resolving:Boolean(authInfo.resolving),
   user:authUser,
@@ -72,8 +72,9 @@ function versionListHTML(){
 function settingPage(){
  const s=statusView();
  const persistenceNote=authInfo.persistence?.ok===false?`<div class="notice warn">${esc(persistenceUnavailableMessage())}</div>`:'';
+ const authErrorNote=authInfo.loadError&&authInfo.available?`<div class="notice warn">${esc(authInfo.loadError.message||'Google 登入未完成')}</div>`:'';
  const accountLine=authUser?`${esc(authUser.displayName||authUser.email||authUser.uid)}`:'尚未登入';
- return `${persistenceNote}<section class="card"><h2>小跑者</h2><form id="child-form"><label>顯示名稱<input id="child-name" value="${esc(active()?.name||'')}" maxlength="30" required></label><button class="secondary" type="submit">儲存名稱</button></form><p class="quiet">第一版使用一位小孩，資料已保留 childId 供未來擴充。</p></section>
+ return `${persistenceNote}${authErrorNote}<section class="card"><h2>小跑者</h2><form id="child-form"><label>顯示名稱<input id="child-name" value="${esc(active()?.name||'')}" maxlength="30" required></label><button class="secondary" type="submit">儲存名稱</button></form><p class="quiet">第一版使用一位小孩，資料已保留 childId 供未來擴充。</p></section>
 <section class="card" id="cloud-backup"><h2>Google 帳號與雲端版本</h2>${backupLine()}<p class="muted">帳號：${accountLine}</p><p class="quiet">以 Firebase 使用者 ID 區隔資料，不用名字或 email 當所有權。換機請登入同一 Google 帳號後選擇版本還原；這是選版取代，不是合併。</p>
 <div class="settings-row"><div><strong>使用 Google 帳號啟用備份</strong><p>登入一次，之後自動備份（無痕、清資料、換瀏覽器除外）</p></div><button class="secondary" id="enable-backup" ${authUser&&accountState?.backupEnabled?'disabled':''}>${authUser&&accountState?.backupEnabled?'已啟用':'啟用備份'}</button></div>
 <div class="settings-row"><div><strong>立即備份</strong><p>略過等待，把目前本機快照上傳</p></div><button class="secondary" id="backup-now" ${authUser&&accountState?.backupEnabled?'':'disabled'}>立即備份</button></div>
@@ -96,7 +97,7 @@ function download(name,content,type){const url=URL.createObjectURL(new Blob([con
 async function loadVersions(){versions=[];if(!cloud||!authUser)return;try{versions=await listRestorableVersions(cloud,authUser.uid);}catch{versions=[];}}
 async function handleEnable(){
  if(!authInfo.configured){toast('尚未設定 Firebase Web 設定，無法登入。本機仍可記錄。');return;}
- if(authInfo.configured&&authInfo.loadError){toast('雲端元件暫時無法使用，本機仍可記錄。');return;}
+ if(authInfo.configured&&!authInfo.available){toast(authInfo.loadError?.message||'雲端元件暫時無法使用，本機仍可記錄。');return;}
  if(authInfo.persistence?.ok===false){toast(persistenceUnavailableMessage());return;}
  try{
   sessionStorage.setItem('kid-running-enable-backup','1');
@@ -197,6 +198,7 @@ try{
  await refresh();await ensureChild();
  const bootAuth=await authService.start();
  authInfo=bootAuth;authUser=bootAuth.user;
+ if(bootAuth.loadError)toast(bootAuth.available?(bootAuth.loadError.message||'Google 登入未完成'):'雲端元件暫時無法使用，本機仍可記錄。');
  if(authUser&&authService.getFirebase()?.firestore){
   const mods=authService.getModules();
   cloud=createFirestoreCloud({firestore:authService.getFirebase().firestore,fs:mods.firestore});

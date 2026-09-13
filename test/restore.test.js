@@ -201,6 +201,7 @@ test('上傳一開始就 upsert devices 父文件，不必等 complete',async()=
  await seedUser(db,{uid:'user-a',records:[sampleRecord('user-a')],enabled:true});
  const backup=service(db,cloud,user);
  const result=await backup.flush('user-a');
+ backup.cancelUploads();
  assert.equal(result.ok,false);
  assert.equal(putBackupCalled,true);
  assert.ok((await inner.listDevices('user-a')).some(d=>(d.deviceId||d.id)==='device-test-1'));

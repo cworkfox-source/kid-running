@@ -1,6 +1,6 @@
 import {
  LOCAL_OWNER,BACKUP_SCHEMA_VERSION,MAX_COMPLETE_VERSIONS,INCOMPLETE_TTL_MS,
- backupContent,stableStringify,sha256,splitUtf8Chunks,retryDelay,classifyBackupError,sameOwner,defaultChildId
+ backupContent,backupLimitError,stableStringify,sha256,splitUtf8Chunks,retryDelay,classifyBackupError,sameOwner,defaultChildId
 } from './core.js';
 
 function deviceLabel(deviceId){
@@ -92,7 +92,8 @@ export function createBackupService(deps){
   const payload=backupContent({children,records,settings},uid);
   const payloadText=stableStringify(payload);
   const hash=await hashText(payloadText,sha);
-  return {payload,payloadText,hash,recordCount:payload.records.length,childCount:payload.children.length,revision:acc.localRevision||0,records,children,settings,account:acc};
+  const recordCount=payload.records.length,childCount=payload.children.length;
+  return {payload,payloadText,hash,recordCount,childCount,limitError:backupLimitError({payloadText,recordCount,childCount}),revision:acc.localRevision||0,records,children,settings,account:acc};
  }
 
  async function persistQueue(item){await db.write([{store:'backupQueue',value:item}]);}
@@ -108,6 +109,7 @@ export function createBackupService(deps){
   const acc=snap.account;
   if(!acc.backupEnabled)return null;
   if(acc.backupPaused&&!ignorePause)return {paused:true,snap};
+  if(snap.limitError){await db.putAccount({...acc,pendingBackup:true,lastError:{kind:'quota',code:'resource-exhausted',message:snap.limitError.message}});return {limitError:snap.limitError,snap};}
   if(snap.recordCount===0&&acc.waitingFirstRecord&&!allowEmpty){
    await db.putAccount({...acc,pendingBackup:false});
    return {waitingFirst:true,snap};
@@ -165,7 +167,8 @@ export function createBackupService(deps){
  }
 
  async function cleanupVersions(cloud,uid,deviceId,{keepBackupId}={}){
-  const all=await cloud.listBackups(uid,deviceId);
+  const devices=await cloud.listDevices(uid);
+  const all=(await Promise.all(devices.map(async device=>(await cloud.listBackups(uid,resolveDeviceId(device))).map(backup=>({...backup,deviceId:backup.deviceId||resolveDeviceId(device)}))))).flat();
   const complete=all.filter(b=>b.status==='complete').sort((a,b)=>{
    const ta=+new Date(a.completedAt?.toDate?.()||a.completedAt||0);
    const tb=+new Date(b.completedAt?.toDate?.()||b.completedAt||0);
@@ -191,7 +194,7 @@ export function createBackupService(deps){
    return created&&clock.now()-created>incompleteTtlMs;
   });
   for(const old of [...extra,...staleIncomplete]){
-   try{await cloud.deleteBackupTree(uid,deviceId,old.backupId||old.id);}catch{/* 清失敗不影響本次成功 */}
+   try{await cloud.deleteBackupTree(uid,old.deviceId||deviceId,old.backupId||old.id);}catch{/* 清失敗不影響本次成功 */}
   }
  }
 
@@ -274,6 +277,7 @@ export function createBackupService(deps){
    for(let pass=0;pass<4;pass++){
     if(canceled||getUser()?.uid!==uid)break;
     const live=await snapshotFor(uid);
+    if(live.limitError)return {ok:false,fatal:true,error:live.limitError};
     let queue=(await db.all('backupQueue')).filter(item=>item.uid===uid&&item.status!=='complete'&&!item.fatal);
     for(const item of queue){
      if(item.status!=='uploading'&&item.contentHash!==live.hash)await removeQueue(item.id);
@@ -307,7 +311,7 @@ export function createBackupService(deps){
      const stillPending=latest.hash!==working.contentHash;
      await db.putAccount({
       ...fresh,
-      pendingBackup:stillPending,
+     pendingBackup:stillPending,
       waitingFirstRecord:false,
       lastError:null,
       lastSuccess:{
@@ -417,6 +421,7 @@ export function createBackupService(deps){
   async flush(uid,{ignorePause=true}={}){
    clearTimers();
    const made=await enqueueCurrent(uid,{ignorePause});
+   if(made?.limitError)return {ok:false,fatal:true,error:made.limitError};
    if(made?.waitingFirst)return {ok:true,waitingFirst:true};
    if(made?.unchanged)return {ok:true,unchanged:true};
    if(made?.paused)return {ok:false,reason:'paused'};

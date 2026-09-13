@@ -16,7 +16,7 @@ npm start
 npm test
 ```
 
-本機連 Firestore Emulator（不必有正式 Firebase 專案）：
+本機連 Firestore Emulator（規則與備份流程自測，不 deploy 正式環境）：
 
 ```sh
 npm install --no-save firebase@11.1.0 @firebase/rules-unit-testing@4.0.1
@@ -25,6 +25,8 @@ npm start
 # 瀏覽器開啟 http://localhost:3000/?emulator=1
 npm run test:emulator
 ```
+
+`npm run test:emulator` 使用 `.firebaserc` 的 `emulator` 別名 `demo-kid-running`，不必登入正式專案。
 
 ## 功能
 
@@ -50,22 +52,20 @@ npm run test:emulator
 - 可暫停自動備份：仍追蹤變更，恢復後補傳最新快照。
 - 不含：Google Drive、匿名驗證、跨裝置即時同步、自動合併、家庭共編、排程背景執行、給一般使用者的 Firebase 管理介面。
 
-### 管理者需準備的 Firebase 設定（本 PR 不會代為開專案或部署正式環境）
+### Firebase 專案現況（本 PR 不 deploy 規則／Hosting、不升 Blaze）
 
-Web config 可以公開，不是密鑰；真正保護靠 Auth + `firestore.rules`。請**不要**把 service account 私鑰放進倉庫或前端。
+Web config 可以公開，不是密鑰；真正保護靠 Auth + `firestore.rules`。請**不要**把 service account 私鑰或 OAuth client secret 放進倉庫或前端。`firebase-config.js` 已填入專案 `kid-running` 的公開 Web 設定。
 
-目前倉庫的 `firebase-config.js` 是空的佔位。缺下列項目時，本機記錄仍可用，雲端按鈕會說明尚未設定：
+| 項目 | 狀態 |
+|---|---|
+| 專案 | `kid-running`（`.firebaserc` default） |
+| Google provider | 已啟用 |
+| 授權網域 | `localhost`、`cworkfox-source.github.io` |
+| Firestore | `(default)`，區域 `asia-east1` |
+| 正式 `firestore.rules` | **尚未部署**（依紅線，本 PR 不會代為 deploy） |
+| Auth domain | `kid-running.firebaseapp.com` |
 
-1. 建立 Firebase 專案（免費 Spark 即可；不要為了這個功能開付費）。
-2. Authentication → Sign-in method 啟用 **Google**。
-3. 授權網域加入：
-   - `localhost`
-   - `cworkfox-source.github.io`（若走 GitHub Pages）
-4. 建立 Firestore 資料庫，並由管理者自行部署本倉庫的 `firestore.rules`（本 PR 不做正式部署）。
-5. 專案設定 → 新增 Web 應用程式，把 `apiKey` / `authDomain` / `projectId` / `appId` 填入 `firebase-config.js`，或複製 `firebase-config.example.js` 為未追蹤的 `firebase-config.local.js`。
-6. Redirect 登入需要網站來源在授權網域內；`authDomain` 通常是 `PROJECT_ID.firebaseapp.com`。iPhone Safari 會優先走 redirect。
-
-本機驗證可不填正式設定：`http://localhost:3000/?emulator=1` 會連 Emulator 的 demo 專案。
+本機 Emulator：`http://localhost:3000/?emulator=1`。規則測試用別名 `demo-kid-running`（見 `.firebaserc` 的 `emulator`）。iPhone Safari 會優先走 redirect。
 
 Firebase JS SDK 釘死 **11.1.0**，由 CDN 載入。CDN 暫時失敗時本機頁面仍可記錄，只是雲端備份不可用。
 
@@ -95,6 +95,6 @@ GitHub Actions 會把靜態檔（含 auth/backup/restore/firebase/cloud 模組�
 
 ## 驗證狀態
 
-見 `test/ACCEPTANCE.md`。`npm test` 含核心解析／備份狀態機／帳號隔離（不需 Firebase 專案）。Firestore Emulator 規則與實際上傳／還原見 `npm run test:emulator`。
+見 `test/ACCEPTANCE.md`。`npm test` 含核心解析／備份狀態機／帳號隔離。Firestore Emulator 規則與實際上傳／還原見 `npm run test:emulator`。正式 rules 尚未部署，故對正式 Firestore 的寫入在規則生效前不可當成已上線。
 
 `scripts/browser-check.mjs` 包含手機新增／編輯／刪除／複製、預覽不入庫、PB、重新載入、JSON 還原、無效檔案、320–1280px 溢出、離線重開及新增的瀏覽器測試。iPhone Safari 真機登入持久請見驗收表 U02。

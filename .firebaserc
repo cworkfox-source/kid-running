@@ -1,5 +1,6 @@
 {
   "projects": {
-    "default": "demo-kid-running"
+    "default": "kid-running",
+    "emulator": "demo-kid-running"
   }
 }

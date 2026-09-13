@@ -38,13 +38,20 @@ test('iPhone Safari 使用 redirect',()=>{
  assert.equal(preferRedirect('Mozilla/5.0 Chrome/120.0.0.0'),false);
 });
 
-test('A02 啟動先解析 auth 設定，未設定不誤報雲端成功',()=>{
- const unresolved=resolveFirebaseConfig({search:'',hostname:'localhost'});
- assert.equal(unresolved.configured,false);
+test('A02 啟動先解析 auth 設定，已設定仍不誤報雲端成功',()=>{
+ const resolved=resolveFirebaseConfig({search:'',hostname:'localhost'});
+ assert.equal(resolved.configured,true);
+ assert.equal(resolved.config.projectId,'kid-running');
+ assert.equal(resolved.emulator,false);
+ const empty=resolveFirebaseConfig({search:'',hostname:'localhost',envConfig:{apiKey:'',projectId:'',appId:''}});
+ assert.equal(empty.configured,false);
  assert.equal(shouldUseEmulator('?emulator=1','localhost'),true);
  const status=describeBackupStatus({configured:false,sdkFailed:false,resolving:false,user:null,enabled:false,recordCount:0});
  assert.equal(status.code,'unconfigured');
  assert.ok(!status.text.includes('已備份'));
+ const idle=describeBackupStatus({configured:true,resolving:false,user:null,enabled:false,recordCount:0});
+ assert.equal(idle.code,'not-enabled');
+ assert.ok(!idle.text.includes('已備份'));
  const checking=describeBackupStatus({configured:true,resolving:true,user:null,enabled:false,recordCount:0});
  assert.equal(checking.code,'checking');
  assert.equal(FIREBASE_SDK_VERSION,'11.1.0');

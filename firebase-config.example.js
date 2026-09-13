@@ -1,14 +1,14 @@
 /**
- * 複製為未追蹤的 firebase-config.local.js，或直接填入 firebase-config.js。
- * 不要把 service account 私鑰放進這個檔案或倉庫。
+ * 複製為未追蹤的 firebase-config.local.js 可覆寫本機設定。
+ * 公開 Web config 已寫在 firebase-config.js（可公開，不是密鑰）。
+ * 不要把 service account 私鑰或 OAuth client secret 放進這個檔案或倉庫。
  *
- * 管理者需完成：
- * 1. 建立 Firebase 專案（免費 Spark 即可，不要為此專案開付費）
- * 2. Authentication → Sign-in method 啟用 Google
- * 3. 授權網域加入 localhost 與 cworkfox-source.github.io
- * 4. 建立 Firestore 資料庫，並部署本倉庫的 firestore.rules（本 PR 不會代你部署正式環境）
- * 5. 專案設定 → 新增 Web 應用程式，把 firebaseConfig 填到 firebase-config.js
- * 6. authDomain 通常是 PROJECT_ID.firebaseapp.com；若用 redirect 登入，authorized domains 必須含實際網站來源
+ * 正式環境現況：專案 kid-running、Google provider 已啟用、
+ * 授權網域含 localhost 與 cworkfox-source.github.io、
+ * Firestore (default) 在 asia-east1。firestore.rules 仍須管理者自行部署（本倉庫不 deploy 正式環境）。
+ *
+ * 本機 Emulator：http://localhost:3000/?emulator=1
+ * `.firebaserc` 的 emulator 別名是 demo-kid-running；`npm run test:emulator` 使用該 demo ID，不必登入正式專案。
  */
 export const firebaseWebConfig={
  apiKey:'YOUR_API_KEY',

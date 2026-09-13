@@ -1,51 +1,31 @@
 # 驗收表 · Google 帳號綁定 + Firestore 版本備份
 
-重跑日期：2026-09-13。環境：Cloud Agent、Node 22、OpenJDK 21。
+更新日期：2026-09-13。環境：Cloud Agent、Node 22、OpenJDK 21。
 
-## Firebase 盤點（正式專案仍不存在，不等管理者）
+## Firebase 盤點
 
-Grok Bot 端 Firebase MCP 已登入 `cworkfox@gmail.com`，`firebase_list_projects` **傳回 0 個專案**：無 active project ID、無 Web app、無 SDK config。
+公開 Web config 已寫入 `firebase-config.js`（僅可公開欄位）。**沒有**加入 client secret／service account，**沒有** deploy 規則或 Hosting，**沒有** merge main，**沒有**升 Blaze。
 
-此 Cloud Agent 工作階段**沒有** Firebase MCP 工具；依指示**沒有**建專案、**沒有**開付費、**沒有** deploy 正式環境、**沒有**把私鑰寫進 repo。
-
-本分支自測設定（足夠 Emulator，不是正式專案）：
-
-| 項目 | 現況 |
+| 項目 | 狀態 |
 |---|---|
-| `.firebaserc` | `default=demo-kid-running`（Emulator demo ID） |
+| 專案 | `kid-running` 已存在 |
+| `.firebaserc` | `default=kid-running`；別名 `emulator=demo-kid-running` 供 Emulator 測試 |
 | `firebase.json` | Auth 9099／Firestore 8080 |
-| `firebase-config.js` | 空佔位（`apiKey`／`projectId`／`appId` 皆空） |
-| 正式 Google 登入 | 未測（無專案／無 provider／無授權網域） |
+| `firebase-config.js` | 已填公開 Web config（`projectId: kid-running`） |
+| Google provider | 已啟用 |
+| 授權網域 | 已含 `localhost`、`cworkfox-source.github.io` |
+| Firestore | `(default)`，`asia-east1` |
+| 正式 `firestore.rules` | **尚未部署**（依紅線） |
+| 正式 Google 登入端到端 | 此環境未完成 OAuth popup／真機；設定已就緒，U02 仍需使用者驗收 |
 
-## `npm test`（2026-09-13 重跑，exit 0）
+## `npm test`（填入 Web config 後重跑，exit 0）
 
 ```
 > kid-running@1.1.0 test
 > node --test test/*.test.js
 
-ok 1 - A01 使用長期持久而非 session
-ok 2 - A03 持久不可用時明確失敗，不改短暫登入
-ok 3 - iPhone Safari 使用 redirect
-ok 4 - A02 啟動先解析 auth 設定，未設定不誤報雲端成功
-ok 5 - B01 本機有雲端無會上傳第一個完整版本
-ok 6 - B02 兩邊空白時等待第一筆，不建空成功版
-ok 7 - B03 debounce 5 秒，持續改動重設，最長等待後仍會備份
-ok 8 - B04 內容未變不重複建立成功版
-ok 9 - B05 佇列持久化且重試沿用同一 backupId
-ok 10 - B06 上傳 N 時產生 N+1，N 成功只推進到 N
-ok 11 - B07 權限錯誤不密集無限重試
-ok 12 - B08 暫停仍追蹤，恢復後補傳最新快照
-ok 13 - B09 離線或 online 事件本身不宣告成功
-ok 14 - C01 分塊上傳後核對摘要才能 complete
-ok 15 - C02 還原前快照且單一交易取代
-ok 16 - C03 還原舊版不覆寫其他裝置新版
-ok 17 - C04 帳號隔離：A 的資料不會進 B 的快照或佇列
-ok 18 - C05 登出取消排程但保留未完成佇列
-ok 19 - S02 每裝置只保留最近 30 個成功版本
-ok 20 - 刪光成績會建空內容新版，且與首次空白區分
-ok 21 - 啟用時本機空雲端有則要求還原，不覆蓋
-ok 22 - U01 SDK 失敗時狀態不顯示已備份，本機資料仍在
-…既有 core 解析／CSV／JSON 驗證 23–55 通過…
+ok 4 - A02 啟動先解析 auth 設定，已設定仍不誤報雲端成功
+…A01–C05、S02、U01 與 core 測試通過…
 ok 56 - emulator 環境可用 # SKIP
 ok 57 - S01 規則與 Emulator 備份還原 # SKIP
 
@@ -53,13 +33,12 @@ ok 57 - S01 規則與 Emulator 備份還原 # SKIP
 # pass 55
 # fail 0
 # skipped 2
-# duration_ms 318.461655
-EXIT:0
+# duration_ms 315.786948
 ```
 
-`npm test` 不啟動 Emulator，故 S01 在此指令下 SKIP；S01 以 `npm run test:emulator` 為準。
+`npm test` 不啟動 Emulator，故 S01 在此指令下 SKIP；S01 以 `npm run test:emulator` 為準。A02 現在斷言 `projectId === 'kid-running'`；空 config 覆寫時仍為未設定且不顯示「已備份」。
 
-## `npm run test:emulator`（2026-09-13 重跑，exit 0）
+## `npm run test:emulator`（填入 Web config 後重跑，exit 0；仍用 demo-kid-running 別名）
 
 ```
 > npx firebase-tools@13.29.3 emulators:exec --project demo-kid-running --only firestore
@@ -103,7 +82,7 @@ bob 讀 alice 路徑由 `assertFails(get)` 覆蓋（讀取拒絕不會出現在�
 | 編號 | 項目 | 結果 | 證據／原因 |
 |---|---|---|---|
 | A01 | Google 登入使用本機持久（非僅分頁 session） | 通過 | `npm test` ok 1 |
-| A02 | 啟動先等 auth 狀態再判斷，不誤報雲端成功 | 通過 | `npm test` ok 4 |
+| A02 | 啟動先等 auth 狀態再判斷，不誤報雲端成功 | 通過 | `npm test` ok 4：已設定 `kid-running`；未登入狀態為「尚未啟用」，不含「已備份」 |
 | A03 | 持久不可用時明確提示 | 通過 | `npm test` ok 2 |
 | B01 | 本機有、雲端無 → 上傳第一個完整版本 | 通過 | `npm test` ok 5 |
 | B02 | 兩邊空白 → 等待第一筆，不建空成功版 | 通過 | `npm test` ok 6 |
@@ -121,7 +100,7 @@ bob 讀 alice 路徑由 `assertFails(get)` 覆蓋（讀取拒絕不會出現在�
 | C05 | 登出取消排程、保留未完成佇列 | 通過 | `npm test` ok 18 |
 | S01 | Rules：不同 uid 不可互操作、禁止公開讀寫 | 通過 | `npm run test:emulator` ok 2；見上方 PERMISSION_DENIED log |
 | S02 | 每裝置保留最近 30 個成功版本 | 通過 | `npm test` ok 19 |
-| U01 | Firebase SDK 失敗／未設定時本機仍可記錄 | 通過 | `npm test` ok 22；Chrome：狀態 `unconfigured`，仍可新增 |
+| U01 | Firebase SDK 失敗／未設定時本機仍可記錄 | 通過 | `npm test` ok 22；未登入時狀態不是「已備份」 |
 | U02 | iPhone Safari 真機 | 需使用者真機驗收 | 此環境無 iPhone |
 
 ## 備份流程是否真能完成？
@@ -134,17 +113,13 @@ EMULATOR_BACKUP_OK {"backupId":"emu-backup-1","status":"complete","recordCount":
 
 本機快照 → `uploading` → chunk → 核對摘要 → `complete` → 還原後紀錄 id 仍為 `emu-1`。
 
-正式 Google 登入端到端：**未測**（帳號下 0 個 Firebase 專案）。
+正式 Google 登入端到端：**此 Cloud Agent 未跑 OAuth popup**（設定已就緒：專案／Google provider／授權網域）。對正式 Firestore 寫入在 **rules 尚未部署** 前不可當成已上線。
 
-## 管理者缺口（清單，不等待）
+## 剩餘缺口（依紅線不在此 PR 處理）
 
-要做真實 Google 登入／換機還原，管理者之後需自行：
-
-1. 用 `cworkfox@gmail.com` 建立 Firebase 專案（免費 Spark 即可；**不要**為此開付費）。
-2. Authentication → 啟用 Google provider。
-3. 授權網域加入 `localhost` 與 `cworkfox-source.github.io`。
-4. 建立 Firestore，並自行部署本倉庫 `firestore.rules`（本 PR 不 deploy 正式環境）。
-5. 新增 Web app，把 `apiKey`／`authDomain`／`projectId`／`appId` 填入 `firebase-config.js`，或未追蹤的 `firebase-config.local.js`。
-6. Redirect 登入：網站來源須在授權網域內；`authDomain` 通常是 `PROJECT_ID.firebaseapp.com`。
+- **自行部署** 本倉庫 `firestore.rules` 到正式 Firestore（本 PR 禁止 deploy 規則／Hosting）。
+- 不要升 Blaze、不要 merge 此 PR（除非管理者明確要求）。
+- U02 iPhone Safari 真機登入持久與 redirect。
+- 真機／本機瀏覽器對 `http://localhost:3000` 或 GitHub Pages 做一次 Google 登入＋備份（rules 部署後）。
 
 **不要**把 service account 私鑰放進倉庫或前端。Web config 不是密鑰；真保護靠 Auth + Rules。

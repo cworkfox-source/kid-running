@@ -29,8 +29,15 @@ export function createFirestoreCloud({firestore,fs}){
    status:data.status||'uploading',
    summary:data.summary||null
   };
-  if(isNew)payload.createdAt=serverTimestamp();
-  await setDoc(backupRef(uid,deviceId,backupId),payload,{merge:!isNew});
+  if(isNew){
+   payload.createdAt=serverTimestamp();
+   const batch=writeBatch(firestore);
+   batch.set(doc(firestore,'users',uid),{uid,lastBackupAt:serverTimestamp()},{merge:true});
+   batch.set(backupRef(uid,deviceId,backupId),payload);
+   await batch.commit();
+   return;
+  }
+  await setDoc(backupRef(uid,deviceId,backupId),payload,{merge:true});
  }
 
  async function putChunk(uid,deviceId,backupId,chunk){

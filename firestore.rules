@@ -7,38 +7,41 @@ service cloud.firestore {
     function isOwner(uid) {
       return signedIn() && request.auth.uid == uid;
     }
+    function validBackupClock(uid) { return request.resource.data.keys().hasOnly(['uid','lastBackupAt']) && request.resource.data.uid == uid && request.resource.data.lastBackupAt == request.time; }
+    function freshBackupClock(uid) { return getAfter(/databases/$(database)/documents/users/$(uid)).data.uid == uid && getAfter(/databases/$(database)/documents/users/$(uid)).data.lastBackupAt == request.time; }
+    function validBackupCreate(uid,deviceId,backupId) {
+      return request.resource.data.keys().hasOnly(['schemaVersion','backupId','uid','deviceId','localRevision','contentHash','recordCount','childCount','chunkCount','status','summary','createdAt'])
+        && request.resource.data.schemaVersion == 1 && request.resource.data.uid == uid && request.resource.data.deviceId == deviceId && request.resource.data.backupId == backupId
+        && request.resource.data.localRevision is int && request.resource.data.localRevision >= 0 && request.resource.data.contentHash is string && request.resource.data.contentHash.matches('^[0-9a-f]{64}$')
+        && request.resource.data.recordCount is int && request.resource.data.recordCount >= 0 && request.resource.data.recordCount <= 3000 && request.resource.data.childCount is int && request.resource.data.childCount >= 0 && request.resource.data.childCount <= 20
+        && request.resource.data.chunkCount is int && request.resource.data.chunkCount >= 1 && request.resource.data.chunkCount <= 4 && request.resource.data.status == 'uploading' && request.resource.data.summary is map && request.resource.data.createdAt == request.time && freshBackupClock(uid);
+    }
 
     match /users/{uid} {
-      allow read, create, update, delete: if isOwner(uid);
+      allow read: if isOwner(uid);
+      allow create: if isOwner(uid) && validBackupClock(uid);
+      allow update: if isOwner(uid) && validBackupClock(uid) && request.time >= resource.data.lastBackupAt + duration.value(60,'s');
+      allow delete: if false;
 
       match /devices/{deviceId} {
         allow read, create, update, delete: if isOwner(uid);
 
         match /backups/{backupId} {
           allow read: if isOwner(uid);
-          allow create: if isOwner(uid)
-            && request.resource.data.uid == uid
-            && request.resource.data.deviceId == deviceId
-            && request.resource.data.backupId == backupId
-            && request.resource.data.status == 'uploading'
-            && request.resource.data.keys().hasAll([
-              'schemaVersion','backupId','uid','deviceId','localRevision',
-              'contentHash','recordCount','childCount','chunkCount','status'
-            ]);
+          allow create: if isOwner(uid) && validBackupCreate(uid,deviceId,backupId);
           allow update: if isOwner(uid)
             && resource.data.status == 'uploading'
-            && request.resource.data.status in ['uploading', 'complete']
-            && request.resource.data.uid == resource.data.uid
-            && request.resource.data.deviceId == resource.data.deviceId
-            && request.resource.data.backupId == resource.data.backupId
-            && request.resource.data.contentHash == resource.data.contentHash
-            && request.resource.data.localRevision == resource.data.localRevision;
+            && request.resource.data.status == 'complete'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','completedAt'])
+            && request.resource.data.completedAt == request.time;
           allow delete: if isOwner(uid);
 
           match /chunks/{chunkId} {
             allow read: if isOwner(uid);
             allow create: if isOwner(uid)
               && int(chunkId) == request.resource.data.index
+              && request.resource.data.keys().hasOnly(['index','data','digest']) && request.resource.data.index is int && request.resource.data.index >= 0 && request.resource.data.data is string && request.resource.data.data.size() <= 262144 && request.resource.data.digest is string && request.resource.data.digest.matches('^[0-9a-f]{64}$')
+              && request.resource.data.index < get(/databases/$(database)/documents/users/$(uid)/devices/$(deviceId)/backups/$(backupId)).data.chunkCount
               && get(/databases/$(database)/documents/users/$(uid)/devices/$(deviceId)/backups/$(backupId)).data.status == 'uploading';
             allow update: if false;
             allow delete: if isOwner(uid);

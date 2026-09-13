@@ -41,12 +41,14 @@ export function dailyStatistics(records,date,{childId}={}){
 }
 export function chartSeries(records,{childId,distance,start='',end='',metric='seconds'}={}){
  const list=recordsInRange(records,{childId,distance,start,end});
- if(metric==='seconds')return list.map(r=>({date:r.date,value:r.seconds,count:1,bestSeconds:r.seconds,record:r}));
+ const individual=Boolean(start&&end&&start===end);
+ if(individual)return list.map((r,index)=>({date:r.date,label:`第 ${index+1} 次`,value:metric==='seconds'?r.seconds:metric==='kmh'?speed(r).kmh:speed(r).ms,count:1,bestSeconds:r.seconds,record:r,individual:true}));
  const days=new Map();
  for(const r of list){const group=days.get(r.date)||[];group.push(r);days.set(r.date,group);}
  return [...days.entries()].sort(([a],[b])=>a.localeCompare(b)).map(([date,group])=>{
   const averageSpeed=group.reduce((sum,r)=>sum+speed(r).ms,0)/group.length;
-  return {date,value:metric==='kmh'?averageSpeed*3.6:averageSpeed,count:group.length,bestSeconds:Math.min(...group.map(r=>r.seconds)),records:group};
+  const averageSeconds=group.reduce((sum,r)=>sum+r.seconds,0)/group.length;
+  return {date,label:date,value:metric==='seconds'?averageSeconds:metric==='kmh'?averageSpeed*3.6:averageSpeed,count:group.length,bestSeconds:Math.min(...group.map(r=>r.seconds)),records:group,individual:false};
  });
 }
 export function csv(records){const cell=v=>{let s=String(v??'');if(/^[=+\-@\t\r]/.test(s))s="'"+s;return '"'+s.replaceAll('"','""')+'"';};return '\uFEFF'+[['日期','距離公尺','秒數','速度m/s','時速km/h','備註'],...chronological(records).map(r=>[r.date,r.distance,r.seconds,speed(r).ms.toFixed(2),speed(r).kmh.toFixed(2),r.note])].map(row=>row.map(cell).join(',')).join('\r\n');}
@@ -55,7 +57,11 @@ export function validateBackup(data){if(data?.version!==1||!Array.isArray(data.c
 export const LOCAL_OWNER='local-only';
 export const BACKUP_SCHEMA_VERSION=1;
 export const CHUNK_MAX_BYTES=256*1024;
-export const MAX_COMPLETE_VERSIONS=30;
+export const MAX_COMPLETE_VERSIONS=10;
+export const MAX_BACKUP_BYTES=1024*1024;
+export const MAX_BACKUP_RECORDS=3000;
+export const MAX_BACKUP_CHILDREN=20;
+export const MAX_BACKUP_CHUNKS=Math.ceil(MAX_BACKUP_BYTES/CHUNK_MAX_BYTES);
 export const INCOMPLETE_TTL_MS=7*24*60*60*1000;
 export const ownerOf=item=>item?.ownerUid||LOCAL_OWNER;
 export const sameOwner=(item,uid)=>ownerOf(item)===uid;
@@ -73,6 +79,13 @@ export function backupContent({children,records,settings},uid){
   records:[...records].filter(r=>sameOwner(r,uid)).map(portableRecord).sort((a,b)=>a.id.localeCompare(b.id)),
   settings:portableSettings(settings,uid)
  };
+}
+export function backupLimitError({payloadText='',recordCount=0,childCount=0}={}){
+ const bytes=new TextEncoder().encode(payloadText).length;
+ if(recordCount>MAX_BACKUP_RECORDS)return Error(`備份紀錄超過 ${MAX_BACKUP_RECORDS} 筆上限`);
+ if(childCount>MAX_BACKUP_CHILDREN)return Error(`備份小孩資料超過 ${MAX_BACKUP_CHILDREN} 筆上限`);
+ if(bytes>MAX_BACKUP_BYTES)return Error(`備份內容超過 ${MAX_BACKUP_BYTES/1024/1024} MiB 上限`);
+ return null;
 }
 export function stableStringify(value){
  if(value===null||typeof value!=='object')return JSON.stringify(value);

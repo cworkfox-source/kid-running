@@ -1,6 +1,6 @@
 import {today,validate,parseText,summary,speed,improvement,chronological,warnings,csv,validateBackup,LOCAL_OWNER,sameOwner,jsonExportPayload,defaultChildId} from './core.js';
 import {openDB,all,write,ensureAppMeta,getAccount,putAccount,acquireLock,heartbeatLock,releaseLock,saveRestoreSnapshot} from './db.js';
-import {createAuthService,persistenceUnavailableMessage} from './auth.js';
+import {createAuthService,persistenceUnavailableMessage,shouldCompleteBackupEnable,writeEnableIntent,readEnableIntent,clearEnableIntent} from './auth.js';
 import {loadFirebaseModules,resolveFirebaseConfig,initFirebase,loadLocalFirebaseConfig} from './firebase.js';
 import {createFirestoreCloud} from './cloud.js';
 import {createBackupService,describeBackupStatus} from './backup.js';
@@ -25,7 +25,7 @@ function distanceSelect(){return `<label class="filter-label">測試距離<selec
 function statusView(){
  const acc=accountState||{};
  return describeBackupStatus({
-  sdkFailed:Boolean(authInfo.configured&&authInfo.loadError),
+  sdkFailed:Boolean(authInfo.configured&&authInfo.loadError&&!authInfo.available),
   configured:Boolean(authInfo.configured),
   resolving:Boolean(authInfo.resolving),
   user:authUser,
@@ -72,8 +72,9 @@ function versionListHTML(){
 function settingPage(){
  const s=statusView();
  const persistenceNote=authInfo.persistence?.ok===false?`<div class="notice warn">${esc(persistenceUnavailableMessage())}</div>`:'';
+ const authErrorNote=authInfo.loadError&&authInfo.available?`<div class="notice warn">${esc(authInfo.loadError.message||'Google 登入未完成')}</div>`:'';
  const accountLine=authUser?`${esc(authUser.displayName||authUser.email||authUser.uid)}`:'尚未登入';
- return `${persistenceNote}<section class="card"><h2>小跑者</h2><form id="child-form"><label>顯示名稱<input id="child-name" value="${esc(active()?.name||'')}" maxlength="30" required></label><button class="secondary" type="submit">儲存名稱</button></form><p class="quiet">第一版使用一位小孩，資料已保留 childId 供未來擴充。</p></section>
+ return `${persistenceNote}${authErrorNote}<section class="card"><h2>小跑者</h2><form id="child-form"><label>顯示名稱<input id="child-name" value="${esc(active()?.name||'')}" maxlength="30" required></label><button class="secondary" type="submit">儲存名稱</button></form><p class="quiet">第一版使用一位小孩，資料已保留 childId 供未來擴充。</p></section>
 <section class="card" id="cloud-backup"><h2>Google 帳號與雲端版本</h2>${backupLine()}<p class="muted">帳號：${accountLine}</p><p class="quiet">以 Firebase 使用者 ID 區隔資料，不用名字或 email 當所有權。換機請登入同一 Google 帳號後選擇版本還原；這是選版取代，不是合併。</p>
 <div class="settings-row"><div><strong>使用 Google 帳號啟用備份</strong><p>登入一次，之後自動備份（無痕、清資料、換瀏覽器除外）</p></div><button class="secondary" id="enable-backup" ${authUser&&accountState?.backupEnabled?'disabled':''}>${authUser&&accountState?.backupEnabled?'已啟用':'啟用備份'}</button></div>
 <div class="settings-row"><div><strong>立即備份</strong><p>略過等待，把目前本機快照上傳</p></div><button class="secondary" id="backup-now" ${authUser&&accountState?.backupEnabled?'':'disabled'}>立即備份</button></div>
@@ -96,36 +97,73 @@ function download(name,content,type){const url=URL.createObjectURL(new Blob([con
 async function loadVersions(){versions=[];if(!cloud||!authUser)return;try{versions=await listRestorableVersions(cloud,authUser.uid);}catch{versions=[];}}
 async function handleEnable(){
  if(!authInfo.configured){toast('尚未設定 Firebase Web 設定，無法登入。本機仍可記錄。');return;}
- if(authInfo.configured&&authInfo.loadError){toast('雲端元件暫時無法使用，本機仍可記錄。');return;}
+ if(authInfo.configured&&!authInfo.available){toast(authInfo.loadError?.message||'雲端元件暫時無法使用，本機仍可記錄。');return;}
  if(authInfo.persistence?.ok===false){toast(persistenceUnavailableMessage());return;}
  try{
-  sessionStorage.setItem('kid-running-enable-backup','1');
+  markEnableIntent();
   const result=await authService.signInWithGoogle();
   if(result?.pending){toast('正在導向 Google 登入…');return;}
+  if(!result?.user){toast('Google 登入未完成，尚未啟用備份。請再試一次。');return;}
   await finishEnable();
  }catch(error){toast(`登入未完成：${error.message||error}`);}
 }
+function intentStores(){
+ const stores=[];
+ try{if(globalThis.localStorage)stores.push(localStorage);}catch{/* ignore */}
+ try{if(globalThis.sessionStorage)stores.push(sessionStorage);}catch{/* ignore */}
+ return stores;
+}
+function markEnableIntent(){for(const store of intentStores())writeEnableIntent(store);}
+function hasEnableIntent(){return intentStores().some(store=>readEnableIntent(store));}
+function clearEnableIntents(){for(const store of intentStores())clearEnableIntent(store);}
+let enableInFlight=null;
 async function finishEnable(){
- const snap=authService.snapshot();
- authUser=snap.user;authInfo=snap;
- if(!authUser)return;
- const result=await backupService.enableForUser(authUser);
- sessionStorage.removeItem('kid-running-enable-backup');
- await refresh();await ensureChild();
- if(result.action==='offer-restore'||result.action==='diverged')restoreOffer={action:result.action,versions:result.versions||[]};
- else restoreOffer=null;
- await loadVersions();
- render();
- if(result.action==='wait-first')toast('已啟用，等待第一筆');
- else if(result.action==='already-synced')toast('雲端版本與本機相同，沿用既有備份');
- else if(result.action==='upload-first')toast('已啟用，正在上傳第一個版本');
- else if(result.action==='diverged')toast('本機已保留為這台裝置的獨立版本，可選擇還原雲端其他版本');
+ if(enableInFlight)return enableInFlight;
+ enableInFlight=(async()=>{
+  const snap=authService.snapshot();
+  authUser=snap.user;authInfo=snap;
+  if(!authUser){
+   if(hasEnableIntent())toast('Google 登入未完成，尚未啟用備份。請再試一次，並允許彈出視窗。');
+   return;
+  }
+  if(authService.getFirebase()?.firestore&&cloud===null){
+   const mods=authService.getModules();
+   cloud=createFirestoreCloud({firestore:authService.getFirebase().firestore,fs:mods.firestore});
+  }
+  const result=await backupService.enableForUser(authUser);
+  clearEnableIntents();
+  await refresh();await ensureChild();
+  if(result.action==='offer-restore'||result.action==='diverged')restoreOffer={action:result.action,versions:result.versions||[]};
+  else restoreOffer=null;
+  await loadVersions();
+  render();
+  if(result.action==='error')toast(`帳號已登入，但備份尚未完成：${result.error?.message||result.classified?.kind||'請稍後再試'}`);
+  else if(result.action==='wait-first')toast('已啟用，等待第一筆');
+  else if(result.action==='already-synced')toast('雲端版本與本機相同，沿用既有備份');
+  else if(result.action==='upload-first')toast('已啟用，正在上傳第一個版本');
+  else if(result.action==='offer-restore')toast('已登入，雲端已有備份，可選擇還原');
+  else if(result.action==='diverged')toast('本機已保留為這台裝置的獨立版本，可選擇還原雲端其他版本');
+  else toast('已用 Google 帳號啟用備份');
+ })();
+ try{await enableInFlight;}
+ finally{enableInFlight=null;}
+}
+async function maybeFinishEnableFromAuth(user){
+ if(!user||enableInFlight)return;
+ const acc=await getAccount(user.uid);
+ if(!shouldCompleteBackupEnable({
+  user,
+  backupEnabled:Boolean(acc.backupEnabled),
+  enableIntent:hasEnableIntent()
+ }))return;
+ await finishEnable();
 }
 async function handleSignOut(){
  const pending=accountState?.pendingBackup||(await all('backupQueue')).some(item=>item.uid===ownerId()&&item.status!=='complete');
  if(pending&&!confirm('還有未完成的雲端備份。登出後這個帳號的資料會從畫面移除，佇列會留在本機等你回來續傳。確定登出？'))return;
  backupService?.cancelUploads();
  await authService.signOut();
+ clearEnableIntents();
  authUser=null;restoreOffer=null;versions=[];
  await refresh();await ensureChild();render();
  toast('已登出。本機快速記錄仍可繼續使用。');
@@ -184,7 +222,14 @@ try{
   resolveConfig:()=>resolveFirebaseConfig({search:location.search,hostname:location.hostname,localConfig}),
   initFirebase
  });
- authService.subscribe(snap=>{authInfo=snap;authUser=snap.user;if(snap.user&&cloud===null&&authService.getFirebase()?.firestore){const mods=authService.getModules();cloud=createFirestoreCloud({firestore:authService.getFirebase().firestore,fs:mods.firestore});}});
+ authService.subscribe(snap=>{
+  authInfo=snap;authUser=snap.user;
+  if(snap.user&&cloud===null&&authService.getFirebase()?.firestore){
+   const mods=authService.getModules();
+   cloud=createFirestoreCloud({firestore:authService.getFirebase().firestore,fs:mods.firestore});
+  }
+  if(snap.user&&backupService&&snap.ready&&!snap.resolving)queueMicrotask(()=>maybeFinishEnableFromAuth(snap.user).catch(error=>toast(`登入未完成：${error.message||error}`)));
+ });
  backupService=createBackupService({
   db:{all,write,getAccount,putAccount,acquireLock,heartbeatLock,releaseLock,saveRestoreSnapshot},
   getCloud:()=>cloud,
@@ -197,15 +242,22 @@ try{
  await refresh();await ensureChild();
  const bootAuth=await authService.start();
  authInfo=bootAuth;authUser=bootAuth.user;
+ if(bootAuth.loadError)toast(bootAuth.available?(bootAuth.loadError.message||'Google 登入未完成'):'雲端元件暫時無法使用，本機仍可記錄。');
+ else if(!authUser&&hasEnableIntent())toast('Google 登入未完成，尚未啟用備份。請再試一次，並允許彈出視窗。');
  if(authUser&&authService.getFirebase()?.firestore){
   const mods=authService.getModules();
   cloud=createFirestoreCloud({firestore:authService.getFirebase().firestore,fs:mods.firestore});
  }
  distance=settings.find(s=>s.id==='distance')?.value||30;draft.distance=distance;
- if(authUser&&sessionStorage.getItem('kid-running-enable-backup')==='1')await finishEnable();
- else if(authUser){
+ if(authUser){
   await refresh();
-  if(accountState?.backupEnabled)await backupService.checkQueue(authUser.uid);
+  const acc=await getAccount(authUser.uid);
+  if(shouldCompleteBackupEnable({
+   user:authUser,
+   backupEnabled:Boolean(acc.backupEnabled),
+   enableIntent:hasEnableIntent()
+  }))await finishEnable();
+  else if(acc.backupEnabled)await backupService.checkQueue(authUser.uid);
  }
  await refresh();await ensureChild();
  const route=location.hash.slice(1);if(['home','records','analysis','settings'].includes(route))page=route;

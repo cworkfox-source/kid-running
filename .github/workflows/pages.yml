@@ -33,7 +33,7 @@ jobs:
       - name: Assemble static site
         run: |
           mkdir -p _site
-          cp index.html styles.css app.js core.js db.js sw.js _site/
+          cp index.html styles.css app.js core.js db.js sw.js drive.js google-config.js _site/
       - name: Setup Pages
         uses: actions/configure-pages@v5
       - name: Upload artifact

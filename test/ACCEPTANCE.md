@@ -4,7 +4,7 @@
 
 ## Firebase 盤點
 
-公開 Web config 已寫入 `firebase-config.js`（僅可公開欄位）。**沒有**加入 client secret／service account，**沒有** deploy Hosting，**沒有** merge main，**沒有**升 Blaze。正式 `firestore.rules` **已經部署**到專案 `kid-running`（手動／MCP，不是 GitHub Actions）。
+公開 Web config 已寫入 `firebase-config.js`（僅可公開欄位）。**沒有**加入 client secret／service account，**沒有** deploy Hosting，**沒有**升 Blaze。正式專案目前仍是舊 `firestore.rules`；本次新規則在倉庫內，需手動部署後才生效。GitHub Actions **不會**自動部署規則。
 
 | 項目 | 狀態 |
 |---|---|
@@ -15,7 +15,7 @@
 | Google provider | 已啟用 |
 | 授權網域 | 已含 `localhost`、`cworkfox-source.github.io` |
 | Firestore | `(default)`，`asia-east1` |
-| 正式 `firestore.rules` | **已部署**（ruleset `2bad0407-6adf-4732-be9f-c94b6b0029ad`；Rules test 4/4 SUCCESS；未登入 REST 寫入 → 403 `PERMISSION_DENIED`）。GitHub Actions **仍不會**自動部署規則 |
+| 正式 `firestore.rules` | 倉庫已更新，**尚未**部署到正式專案（舊 ruleset `2bad0407-6adf-4732-be9f-c94b6b0029ad` 仍在線上）。GitHub Actions **仍不會**自動部署規則 |
 | 正式 Google 登入端到端 | 此環境未完成 OAuth popup／真機；設定已就緒，U02 仍需使用者驗收 |
 
 ## `npm test`（本次修正後重跑，exit 0）
@@ -24,13 +24,13 @@
 > kid-running@1.1.0 test
 > node --test test/*.test.js
 
-# tests 67
-# pass 65
+# tests 102
+# pass 100
 # fail 0
 # skipped 2
 ```
 
-含 A01–C05、S02、U01、iPhone popup-first／redirect 失敗可見、非致命備份失敗會排程 `processQueue`。`npm test` 不啟動 Emulator，故 S01 在此指令下 SKIP；S01 以 `npm run test:emulator` 為準。A02 斷言 `projectId === 'kid-running'`；空 config 覆寫時仍為未設定且不顯示「已備份」。
+含 A01–C05、S02、U01、日期區間清除、圖表跨日／單日說明、還原→重新整理筆數一致、備份 60 秒冷卻改重試、啟用時 remap `child_01`。`npm test` 不啟動 Emulator，故 S01 在此指令下 SKIP；S01 以 `npm run test:emulator` 為準。A02 斷言 `projectId === 'kid-running'`；空 config 覆寫時仍為未設定且不顯示「已備份」。
 
 ## `npm run test:emulator`（填入 Web config 後重跑，exit 0；仍用 demo-kid-running 別名）
 
@@ -94,10 +94,13 @@ bob 讀 alice 路徑由 `assertFails(get)` 覆蓋（讀取拒絕不會出現在�
 | C03 | 還原舊版不覆寫其他裝置新版 | 通過 | `npm test` |
 | C04 | 帳號隔離 A 不可給 B | 通過 | `npm test` |
 | C05 | 登出取消排程、保留未完成佇列 | 通過 | `npm test` |
-| S01 | Rules：不同 uid 不可互操作、禁止公開讀寫 | 通過 | `npm run test:emulator`；見上方 PERMISSION_DENIED log。正式專案 ruleset `2bad0407-6adf-4732-be9f-c94b6b0029ad` 已部署 |
-| S02 | 每裝置保留最近 30 個成功版本 | 通過 | `npm test` |
+| S01 | Rules：不同 uid 不可互操作、禁止公開讀寫 | 程式已加強 | Emulator 測試仍為 SKIP（此環境無 Emulator）。新規則：建立備份須同批寫入 `lastBackupId`；60 秒內第二筆拒絕；`completeCount` 上限 10 且須與 complete／delete 同批。**正式專案仍是舊 ruleset `2bad0407-…`，需手動部署後才生效** |
+| S02 | 每帳號保留最近 10 個成功版本 | 通過 | `npm test` 客戶端清理；rules `completeCount <= 10` 綁定實際 complete／delete |
 | U01 | Firebase SDK 失敗／未設定時本機仍可記錄 | 通過 | `npm test`；未登入時狀態不是「已備份」 |
 | U02 | iPhone Safari 真機 | 需使用者真機驗收 | 此環境無 iPhone。單元測試：一律先 popup，被擋才 redirect；`getRedirectResult` 失敗會進 `loadError` |
+| P0 | 還原後重新整理紀錄仍可見 | 通過 | 開機先等 auth 再 `ensureChild`；還原／JSON／啟用會把 `child_01` 改成帳號專用 ID；既有失聯紀錄可 reclaim 或 remap |
+| B11 | 60 秒冷卻被拒會重試，不當成權限不足 | 通過 | `npm test` |
+| A05 | 分析頁日期區間一鍵清除、跨日平均／單日各筆說明 | 通過 | `npm test` 與畫面 `#clear-analysis-range` |
 
 ## 備份流程是否真能完成？
 
@@ -113,9 +116,10 @@ EMULATOR_BACKUP_OK {"backupId":"emu-backup-1","status":"complete","recordCount":
 
 ## 剩餘缺口
 
-- GitHub Actions **不會**自動部署 `firestore.rules`；目前正式規則是手動／MCP 部署，請勿把 CI 寫成會 deploy 規則。
+- GitHub Actions **不會**自動部署 `firestore.rules`。前端推到 `main` 後 Pages 會更新；**伺服器端 10 筆上限與一次時間戳綁一個 backupId，要等正式規則手動部署後才生效。**
 - 不要升 Blaze、不要把 service account 私鑰放進倉庫，也不要 deploy Firebase Hosting。
 - U02 iPhone Safari 真機：確認 popup-first 登入（GitHub Pages 跨網域 redirect 曾失敗）。
-- 真機／本機瀏覽器對 `http://localhost:3000` 或 GitHub Pages 做一次 Google 登入＋備份。
+- 真機請**先不要清除網站資料、也不要刪舊備份**。更新後重新整理即可；若仍看不到紀錄，到設定頁從雲端版本還原。
+- 此環境未跑 `npm run test:emulator`（無 Firestore Emulator）。S01 以 Emulator 為準。
 
 **不要**把 service account 私鑰放進倉庫或前端。Web config 不是密鑰；真保護靠 Auth + Rules。

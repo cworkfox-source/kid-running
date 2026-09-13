@@ -14,7 +14,8 @@ function service(db,cloud,user,extra={}){
   debounceMs:extra.debounceMs||5000,maxWaitMs:extra.maxWaitMs||30000,
   randomId:extra.randomId||(()=>'backup-fixed'),random:()=>0.5,
   splitChunks:extra.splitChunks||(text=>splitUtf8Chunks(text,extra.chunkBytes||256*1024)),
-  keepVersions:extra.keepVersions||30
+  keepVersions:extra.keepVersions||30,
+  clockIntervalMs:extra.clockIntervalMs??0
  });
 }
 
@@ -319,7 +320,7 @@ test('C05 登出取消排程但保留未完成佇列',async()=>{
  assert.equal(local[0].ownerUid,'user-a');
 });
 
-test('S02 每裝置只保留最近 30 個成功版本',async()=>{
+test('S02 每帳號只保留最近 N 個成功版本',async()=>{
  const db=createMemoryDB();
  const cloud=createMemoryCloud();
  const user={uid:'user-a'};
@@ -485,3 +486,62 @@ test('U01 SDK 失敗時狀態不顯示已備份，本機資料仍在',async()=>{
  assert.ok(!status.text.includes('已備份'));
  assert.equal((await db.all('records')).length,1);
 });
+
+test('60 秒內再建新版會當冷卻重試，而不是權限不足',async()=>{
+ const db=createMemoryDB();
+ const inner=createMemoryCloud();
+ let puts=0;
+ const cloud={
+  ...inner,
+  async putBackup(...args){
+   puts+=1;
+   if(puts>1)throw Object.assign(Error('PERMISSION_DENIED'),{code:'permission-denied'});
+   return inner.putBackup(...args);
+  },
+  putChunk:(...a)=>inner.putChunk(...a),
+  getBackup:(...a)=>inner.getBackup(...a),
+  listChunks:(...a)=>inner.listChunks(...a),
+  completeBackup:(...a)=>inner.completeBackup(...a),
+  updateDevice:(...a)=>inner.updateDevice(...a),
+  listDevices:(...a)=>inner.listDevices(...a),
+  listBackups:(...a)=>inner.listBackups(...a),
+  deleteBackupTree:(...a)=>inner.deleteBackupTree(...a)
+ };
+ const user={uid:'user-a'};
+ await seedUser(db,{uid:'user-a',records:[sampleRecord('user-a',{id:'r1'})],enabled:true});
+ const clock=createClock();
+ const backup=service(db,cloud,user,{clock,clockIntervalMs:60_000,randomId:()=>'c1'});
+ const first=await backup.flush('user-a');
+ assert.equal(first.ok,true);
+ await addRecord(db,'user-a',{id:'r2',seconds:7});
+ await db.putAccount({...(await db.getAccount('user-a')),backupEnabled:true,pendingBackup:true,lastSuccess:(await db.getAccount('user-a')).lastSuccess});
+ const second=service(db,cloud,user,{clock,clockIntervalMs:60_000,randomId:()=>'c2'});
+ const result=await second.flush('user-a');
+ assert.equal(result.ok,false);
+ assert.notEqual(result.fatal,true);
+ const queued=(await db.all('backupQueue')).find(item=>item.uid==='user-a'&&item.status!=='complete');
+ assert.ok(queued);
+ assert.equal(queued.fatal,false);
+ assert.equal(queued.lastError.kind,'cooldown');
+ assert.ok(queued.nextRetryAt>clock.now());
+ const status=describeBackupStatus({configured:true,user,enabled:true,online:true,persistenceOk:true,pending:true,lastError:{kind:'cooldown'},recordCount:2});
+ assert.equal(status.code,'cooldown');
+ assert.ok(!status.text.includes('權限不足'));
+ second.cancelUploads();
+});
+
+test('啟用備份時會把 guest child_01 改成帳號專用 ID',async()=>{
+ const db=createMemoryDB();
+ const cloud=createMemoryCloud();
+ await seedUser(db,{uid:LOCAL_OWNER,children:[sampleChild(LOCAL_OWNER,'child_01')],records:[sampleRecord(LOCAL_OWNER,{id:'legacy',childId:'child_01'})],enabled:false});
+ const backup=service(db,cloud,{uid:'user-a'});
+ const result=await backup.enableForUser({uid:'user-a'});
+ backup.cancelUploads();
+ assert.ok(['upload-first','already-synced','diverged'].includes(result.action));
+ const children=await db.all('children');
+ const records=await db.all('records');
+ assert.ok(children.some(c=>c.id==='child_01__user-a'&&c.ownerUid==='user-a'));
+ assert.equal(records.find(r=>r.id==='legacy').childId,'child_01__user-a');
+ assert.equal(records.find(r=>r.id==='legacy').ownerUid,'user-a');
+});
+

@@ -1,4 +1,4 @@
-const CACHE='kid-running-v11';
+const CACHE='kid-running-v12';
 const ASSETS=['./','./index.html','./styles.css','./app.js','./core.js','./db.js','./auth.js','./backup.js','./restore.js','./export.js','./firebase.js','./firebase-config.js','./cloud.js'];
 
 self.addEventListener('install',event=>{
@@ -26,7 +26,7 @@ function isNetworkFirst(request){
  const accept=request.headers.get('accept')||'';
  if(accept.includes('text/html'))return true;
  const path=new URL(request.url).pathname;
- return path.endsWith('/')||path.endsWith('/index.html')||path.endsWith('/app.js');
+ return path.endsWith('/')||path.endsWith('/index.html')||path.endsWith('.js');
 }
 
 function canCache(response){

@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {parseLine,parseText,validDate,validate,speed,summary,improvement,warnings,csv,validateBackup,stableStringify,backupContent,contentHash,splitUtf8Chunks,retryDelay,classifyBackupError,LOCAL_OWNER,duplicateGroups,dailyStatistics,chartSeries} from '../core.js';
+import {parseLine,parseText,validDate,validate,speed,summary,improvement,warnings,csv,validateBackup,stableStringify,backupContent,contentHash,splitUtf8Chunks,retryDelay,classifyBackupError,LOCAL_OWNER,duplicateGroups,dailyStatistics,chartSeries,remapBackupChildIds,repairChildOwnership,visibleAfterRepair,chartCaption,clockCooldownRemaining,BACKUP_CLOCK_INTERVAL_MS,defaultChildId} from '../core.js';
 const now='2026-09-13';
 for(const [input,seconds] of [['30公尺 7.42秒',7.42],['30m 7.42s',7.42],['今天30公尺跑7秒42',7.42],['30米 7.42秒',7.42],['30 M 8秒5',8.5],['30公尺 8秒05',8.05],['30公尺 7秒420',7.42],['小孩今天30米跑7秒42',7.42],['30公尺跑了7.42秒',7.42],['３０ｍ ７．４２ｓ',7.42]])test(input,()=>{const r=parseLine(input,now);assert.equal(r.distance,30);assert.equal(r.seconds,seconds);assert.equal(r.date,now);});
 for(const input of ['9/13 30米 7秒42','2026/9/13 30m 7.42秒','9-13 30m 7.42s','2026-09-13 30m 7.42s'])test(input,()=>assert.equal(parseLine(input,now).date,now));
@@ -55,3 +55,56 @@ test('UTF-8 分塊不切字元且退避有上限',()=>{
  assert.equal(classifyBackupError({code:'unavailable'}).fatal,false);
  assert.equal(LOCAL_OWNER,'local-only');
 });
+test('圖表說明：跨日平均、單日各筆',()=>{
+ assert.match(chartCaption({metric:'seconds'}),/每日平均秒數/);
+ assert.match(chartCaption({metric:'seconds',start:'2026-09-01',end:'2026-09-10'}),/跨日顯示每日平均/);
+ assert.match(chartCaption({metric:'seconds',start:'2026-09-01',end:'2026-09-01'}),/單日各筆連線/);
+ assert.match(chartCaption({metric:'ms',start:'2026-09-01',end:'2026-09-01'}),/單日各筆速度/);
+});
+test('備份冷卻剩餘時間與權限錯誤可當冷卻重試',()=>{
+ assert.equal(clockCooldownRemaining(null,1000),0);
+ assert.equal(clockCooldownRemaining('1970-01-01T00:00:00.000Z',30_000),BACKUP_CLOCK_INTERVAL_MS-30_000);
+ assert.equal(classifyBackupError({code:'permission-denied'},{withinClockCooldown:true}).kind,'cooldown');
+ assert.equal(classifyBackupError({kind:'cooldown',message:'備份冷卻中'}).fatal,false);
+ assert.equal(classifyBackupError({code:'permission-denied'}).fatal,true);
+});
+test('還原 child_01 會改寫成帳號專用 ID',()=>{
+ const payload={children:[{id:'child_01',name:'小明',birthday:null}],records:[run(7.42)]};
+ const remapped=remapBackupChildIds(payload,'user-a',new Set(['child_01']));
+ assert.equal(remapped.children[0].id,'child_01__user-a');
+ assert.equal(remapped.records[0].childId,'child_01__user-a');
+ assert.equal(defaultChildId('user-a'),'child_01__user-a');
+});
+test('還原後模擬重新整理：紀錄仍指向可見小孩',()=>{
+ const children=[{id:'child_01',name:'小明',birthday:null,ownerUid:'user-a'}];
+ const records=[run(7.42,'2026-09-13','rec-1')];
+ records[0].ownerUid='user-a';
+ const after=visibleAfterRepair({children,records,uid:'user-a'});
+ assert.equal(after.visible.length,1);
+ assert.equal(after.visible[0].id,'rec-1');
+ assert.equal(after.child.ownerUid,'user-a');
+});
+test('登入前誤建 child_01 覆寫擁有者後，可修復失聯紀錄',()=>{
+ const children=[{id:'child_01',name:'小孩',birthday:null,ownerUid:LOCAL_OWNER}];
+ const records=[{...run(7.42,'2026-09-13','rec-1'),ownerUid:'user-a',childId:'child_01'}];
+ const after=visibleAfterRepair({children,records,uid:'user-a'});
+ assert.equal(after.visible.length,1);
+ assert.equal(after.visible[0].id,'rec-1');
+ assert.equal(after.child.id,'child_01');
+ assert.equal(after.child.ownerUid,'user-a');
+ const repaired=repairChildOwnership({children,records,uid:'user-a'});
+ assert.ok(repaired.changes.some(c=>c.type==='reclaim'));
+});
+test('非 stub 的 child_01 被占用時，帳號紀錄改掛到自己的小孩',()=>{
+ const children=[{id:'child_01',name:'本地小孩',birthday:null,ownerUid:LOCAL_OWNER}];
+ const records=[
+  {...run(8,'2026-09-12','local-1'),ownerUid:LOCAL_OWNER,childId:'child_01'},
+  {...run(7.42,'2026-09-13','rec-1'),ownerUid:'user-a',childId:'child_01'}
+ ];
+ const after=visibleAfterRepair({children,records,uid:'user-a'});
+ assert.equal(after.visible.length,1);
+ assert.equal(after.visible[0].id,'rec-1');
+ assert.equal(after.child.id,'child_01__user-a');
+ assert.equal(after.child.ownerUid,'user-a');
+});
+

@@ -1,4 +1,4 @@
-import {LOCAL_OWNER,sameOwner,backupContent,stableStringify,sha256,classifyBackupError} from './core.js';
+import {LOCAL_OWNER,sameOwner,backupContent,stableStringify,sha256,classifyBackupError,remapBackupChildIds} from './core.js';
 import {deviceLabel,formatBackupTime,resolveDeviceId} from './backup.js';
 
 function mapRestorable(backup,device,deviceId){
@@ -122,10 +122,12 @@ export async function restoreVersion({db,cloud,uid,version,settings,sha=sha256})
  const reverseId=`reverse:${uid}`;
  const reverse=allSettings.find(s=>s.id===reverseId);
  if(reverse)changes.push({store:'settings',delete:reverseId});
- for(const child of payload.children){
+ const occupied=new Set(children.filter(c=>!sameOwner(c,uid)).map(c=>c.id));
+ const remapped=remapBackupChildIds(payload,uid,occupied);
+ for(const child of remapped.children){
   changes.push({store:'children',value:{...child,ownerUid:uid}});
  }
- for(const rec of payload.records){
+ for(const rec of remapped.records){
   changes.push({store:'records',value:{...rec,ownerUid:uid}});
  }
  if(payload.settings&&typeof payload.settings.reverse==='boolean'){
@@ -135,10 +137,10 @@ export async function restoreVersion({db,cloud,uid,version,settings,sha=sha256})
  const after=await db.getAccount(uid);
  await db.putAccount({
   ...after,
-  waitingFirstRecord:payload.records.length===0,
+  waitingFirstRecord:remapped.records.length===0,
   lastError:null
  });
- return {payload,hash:verified.hash};
+ return {payload:{...payload,children:remapped.children,records:remapped.records},hash:verified.hash,idMap:remapped.idMap};
 }
 
 export function restorePreview(version,localRecordCount){

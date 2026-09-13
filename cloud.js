@@ -1,4 +1,4 @@
-import {BACKUP_SCHEMA_VERSION} from './core.js';
+import {BACKUP_SCHEMA_VERSION,MAX_COMPLETE_VERSIONS} from './core.js';
 
 function pathNames(uid,deviceId,backupId){
  return {
@@ -32,7 +32,7 @@ export function createFirestoreCloud({firestore,fs}){
   if(isNew){
    payload.createdAt=serverTimestamp();
    const batch=writeBatch(firestore);
-   batch.set(doc(firestore,'users',uid),{uid,lastBackupAt:serverTimestamp()},{merge:true});
+   batch.set(doc(firestore,'users',uid),{uid,lastBackupAt:serverTimestamp(),lastBackupId:backupId},{merge:true});
    batch.set(backupRef(uid,deviceId,backupId),payload);
    await batch.commit();
    return;
@@ -59,7 +59,14 @@ export function createFirestoreCloud({firestore,fs}){
  }
 
  async function completeBackup(uid,deviceId,backupId){
-  await updateDoc(backupRef(uid,deviceId,backupId),{status:'complete',completedAt:serverTimestamp()});
+  const userRef=doc(firestore,'users',uid);
+  const userSnap=await getDoc(userRef);
+  const count=userSnap.exists()&&Number.isFinite(userSnap.data().completeCount)?userSnap.data().completeCount:0;
+  if(count>=MAX_COMPLETE_VERSIONS)throw Object.assign(Error(`已達每帳號 ${MAX_COMPLETE_VERSIONS} 個成功版本上限`),{code:'failed-precondition'});
+  const batch=writeBatch(firestore);
+  batch.update(backupRef(uid,deviceId,backupId),{status:'complete',completedAt:serverTimestamp()});
+  batch.set(userRef,{completeCount:count+1,lastCompletedBackupId:backupId,lastCompletedDeviceId:deviceId},{merge:true});
+  await batch.commit();
   return getBackup(uid,deviceId,backupId);
  }
 
@@ -83,13 +90,22 @@ export function createFirestoreCloud({firestore,fs}){
  }
 
  async function deleteBackupTree(uid,deviceId,backupId){
+  const meta=await getBackup(uid,deviceId,backupId);
   const chunks=await listChunks(uid,deviceId,backupId);
   for(let i=0;i<chunks.length;i+=400){
    const batch=writeBatch(firestore);
    for(const chunk of chunks.slice(i,i+400))batch.delete(chunkRef(uid,deviceId,backupId,chunk.index));
    await batch.commit();
   }
-  await deleteDoc(backupRef(uid,deviceId,backupId));
+  const last=writeBatch(firestore);
+  last.delete(backupRef(uid,deviceId,backupId));
+  if(meta?.status==='complete'){
+   const userRef=doc(firestore,'users',uid);
+   const snap=await getDoc(userRef);
+   const count=snap.exists()&&Number.isFinite(snap.data().completeCount)?snap.data().completeCount:0;
+   last.set(userRef,{completeCount:Math.max(0,count-1),lastDeletedBackupId:backupId,lastDeletedDeviceId:deviceId},{merge:true});
+  }
+  await last.commit();
  }
 
  return {pathNames,putBackup,putChunk,getBackup,listChunks,completeBackup,updateDevice,listDevices,listBackups,deleteChunk,deleteBackupTree};

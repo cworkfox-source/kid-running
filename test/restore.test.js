@@ -4,14 +4,14 @@ import {readFile} from 'node:fs/promises';
 import {restoreVersion,restorePreview,queryRestorableVersions,restoreListCopy,listRestorableVersions} from '../restore.js';
 import {createBackupService} from '../backup.js';
 import {createMemoryCloud} from '../cloud.js';
-import {createMemoryDB,sampleRecord,seedUser} from './support.js';
-import {splitUtf8Chunks} from '../core.js';
+import {createMemoryDB,sampleRecord,sampleChild,seedUser} from './support.js';
+import {splitUtf8Chunks,defaultChildId,LOCAL_OWNER} from '../core.js';
 
 function service(db,cloud,user){
  return createBackupService({
   db,getCloud:()=>cloud,getUser:()=>user,getAppMeta:async()=>({deviceId:'device-test-1'}),
   isOnline:()=>true,tabId:'tab-1',randomId:()=>'backup-fixed',random:()=>0.5,
-  splitChunks:text=>splitUtf8Chunks(text,256*1024)
+  splitChunks:text=>splitUtf8Chunks(text,256*1024),clockIntervalMs:0
  });
 }
 
@@ -112,6 +112,10 @@ test('app.js 設定頁還原入口不依 backupEnabled 隱藏，備份成功會�
  assert.match(app,/lastSuccessKey/);
  assert.match(app,/clearRestoreList/);
  assert.match(app,/inconsistent/);
+ assert.match(app,/id="clear-analysis-range"/);
+ assert.match(app,/repairChildOwnership/);
+ assert.match(app,/authService\.start\(\)/);
+ assert.doesNotMatch(app,/await refresh\(\);await ensureChild\(\);\s*const bootAuth=await authService\.start/);
  assert.doesNotMatch(app,/if\(!authUser\|\|!accountState\?\.backupEnabled\)return '<p class="quiet">啟用備份後/);
  assert.doesNotMatch(app,/catch\{versions=\[\];\}/);
  assert.match(app,/本機資料未被刪除/);
@@ -259,3 +263,33 @@ function cloudWrap(inner){
   deleteBackupTree:(...a)=>inner.deleteBackupTree(...a)
  };
 }
+
+test('還原 child_01 後再模擬重新整理，筆數與內容仍一致',async()=>{
+ const db=createMemoryDB();
+ const cloud=createMemoryCloud();
+ const user={uid:'user-a'};
+ await seedUser(db,{uid:'user-a',children:[sampleChild('user-a','child_01')],records:[sampleRecord('user-a',{id:'keep-run',childId:'child_01',seconds:7.42})],enabled:true});
+ const backup=service(db,cloud,user);
+ await backup.flush('user-a');
+ const versions=await listRestorableVersions(cloud,'user-a');
+ await restoreVersion({db,cloud,uid:'user-a',version:versions[0]});
+ const afterRestore=await db.all('records');
+ const childrenAfter=await db.all('children');
+ assert.equal(afterRestore.length,1);
+ assert.equal(afterRestore[0].id,'keep-run');
+ assert.equal(afterRestore[0].seconds,7.42);
+ assert.ok(childrenAfter.some(c=>c.id===defaultChildId('user-a')&&c.ownerUid==='user-a'));
+ assert.equal(afterRestore[0].childId,defaultChildId('user-a'));
+ const guest={id:'child_01',name:'小孩',birthday:null,ownerUid:LOCAL_OWNER};
+ await db.write([{store:'children',value:guest}]);
+ const {visibleAfterRepair}=await import('../core.js');
+ const simulated=visibleAfterRepair({
+  children:await db.all('children'),
+  records:await db.all('records'),
+  uid:'user-a'
+ });
+ assert.equal(simulated.visible.length,1);
+ assert.equal(simulated.visible[0].id,'keep-run');
+ assert.equal(simulated.visible[0].seconds,7.42);
+});
+

@@ -9,6 +9,7 @@ const emulatorHost=process.env.FIRESTORE_EMULATOR_HOST||process.env.FIREBASE_FIR
 let rulesTesting=null;
 try{rulesTesting=await import('@firebase/rules-unit-testing');}catch{rulesTesting=null;}
 const canRun=Boolean(rulesTesting&&emulatorHost);
+const HASH='a'.repeat(64);
 
 test('emulator 環境可用',{skip:!canRun},()=>{
  assert.ok(emulatorHost);
@@ -21,30 +22,75 @@ test('S01 規則與 Emulator 備份還原',{skip:!canRun},async()=>{
   projectId:'demo-kid-running-backup',
   firestore:{rules}
  });
- // rules-unit-testing 的 useEmulator 必須在自動連線之前；否則會報 already been started
  const savedHost=process.env.FIRESTORE_EMULATOR_HOST;
  delete process.env.FIRESTORE_EMULATOR_HOST;
  try{
   const aliceFs=testEnv.authenticatedContext('alice').firestore();
   const bobFs=testEnv.authenticatedContext('bob').firestore();
   const anonFs=testEnv.unauthenticatedContext().firestore();
+  const ts=timestamp(aliceFs);
   const path='users/alice/devices/d1/backups/b1';
-  await assertSucceeds(aliceFs.doc(path).set({
-   schemaVersion:1,backupId:'b1',uid:'alice',deviceId:'d1',localRevision:1,
-   contentHash:'abc',recordCount:1,childCount:1,chunkCount:1,status:'uploading'
-  }));
+  await assertFails(anonFs.doc('users/alice').set({hack:true}));
   await assertFails(bobFs.doc(path).get());
   await assertFails(anonFs.doc(path).get());
-  await assertFails(anonFs.doc('users/alice').set({hack:true}));
-  await assertSucceeds(aliceFs.doc(path).update({status:'complete'}));
+  await assertFails(aliceFs.doc(path).set({
+   schemaVersion:1,backupId:'b1',uid:'alice',deviceId:'d1',localRevision:1,
+   contentHash:HASH,recordCount:1,childCount:1,chunkCount:1,status:'uploading'
+  }));
+
+  const first=aliceFs.batch();
+  first.set(aliceFs.doc('users/alice'),{uid:'alice',lastBackupAt:ts(),lastBackupId:'b1'});
+  first.set(aliceFs.doc(path),{
+   schemaVersion:1,backupId:'b1',uid:'alice',deviceId:'d1',localRevision:1,
+   contentHash:HASH,recordCount:1,childCount:1,chunkCount:1,status:'uploading',
+   summary:{recordCount:1},createdAt:ts()
+  });
+  await assertSucceeds(first.commit());
+
+  const second=aliceFs.batch();
+  second.set(aliceFs.doc('users/alice'),{uid:'alice',lastBackupAt:ts(),lastBackupId:'b2'},{merge:true});
+  second.set(aliceFs.doc('users/alice/devices/d1/backups/b2'),{
+   schemaVersion:1,backupId:'b2',uid:'alice',deviceId:'d1',localRevision:2,
+   contentHash:HASH,recordCount:1,childCount:1,chunkCount:1,status:'uploading',
+   summary:{recordCount:1},createdAt:ts()
+  });
+  await assertFails(second.commit());
+
+  const complete=aliceFs.batch();
+  complete.update(aliceFs.doc(path),{status:'complete',completedAt:ts()});
+  complete.set(aliceFs.doc('users/alice'),{completeCount:1,lastCompletedBackupId:'b1',lastCompletedDeviceId:'d1'},{merge:true});
+  await assertSucceeds(complete.commit());
   await assertFails(aliceFs.doc(path).update({status:'uploading'}));
+
+  const unboundBump=aliceFs.batch();
+  unboundBump.set(aliceFs.doc('users/alice'),{completeCount:0,lastDeletedBackupId:'b1',lastDeletedDeviceId:'d1'},{merge:true});
+  await assertFails(unboundBump.commit());
+
+  await testEnv.withSecurityRulesDisabled(async context=>{
+   const db=context.firestore();
+   await db.doc('users/alice').set({uid:'alice',completeCount:10,lastBackupAt:new Date(0),lastBackupId:'old'},{merge:true});
+   await db.doc('users/alice/devices/d1/backups/b11').set({
+    schemaVersion:1,backupId:'b11',uid:'alice',deviceId:'d1',localRevision:11,
+    contentHash:HASH,recordCount:1,childCount:1,chunkCount:1,status:'uploading',
+    summary:{recordCount:1},createdAt:new Date()
+   });
+  });
+  const eleventh=aliceFs.batch();
+  eleventh.update(aliceFs.doc('users/alice/devices/d1/backups/b11'),{status:'complete',completedAt:ts()});
+  eleventh.set(aliceFs.doc('users/alice'),{completeCount:11,lastCompletedBackupId:'b11',lastCompletedDeviceId:'d1'},{merge:true});
+  await assertFails(eleventh.commit());
+
+  await testEnv.withSecurityRulesDisabled(async context=>{
+   const db=context.firestore();
+   await db.doc('users/alice').set({uid:'alice',completeCount:1,lastBackupAt:new Date(0),lastBackupId:'b1'},{merge:true});
+  });
 
   const cloud=createCompatCloud(aliceFs);
   const db=createMemoryDB();
   await seedUser(db,{uid:'alice',records:[sampleRecord('alice',{id:'emu-1',seconds:7.42})],enabled:true});
   const backup=createBackupService({
    db,getCloud:()=>cloud,getUser:()=>({uid:'alice'}),getAppMeta:async()=>({deviceId:'emu-device'}),
-   isOnline:()=>true,tabId:'emu-tab',randomId:()=>'emu-backup-1'
+   isOnline:()=>true,tabId:'emu-tab',randomId:()=>'emu-backup-1',clockIntervalMs:0
   });
   const result=await backup.flush('alice');
   assert.equal(result.ok,true,result.error?.message||result.reason||'flush');
@@ -63,13 +109,26 @@ test('S01 規則與 Emulator 備份還原',{skip:!canRun},async()=>{
  }
 });
 
+function timestamp(firestore){
+ const fv=firestore?.constructor?.FieldValue||globalThis.firebase?.firestore?.FieldValue;
+ return fv?.serverTimestamp?.()?fv.serverTimestamp():new Date();
+}
+
 function createCompatCloud(firestore){
+ const ts=()=>timestamp(firestore);
  return {
   async putBackup(uid,deviceId,backupId,data,isNew){
    const ref=firestore.doc(`users/${uid}/devices/${deviceId}/backups/${backupId}`);
    const payload={schemaVersion:1,backupId,uid,deviceId,...data};
-   if(isNew)payload.createdAt=new Date();
-   await ref.set(payload,{merge:!isNew});
+   if(isNew){
+    payload.createdAt=ts();
+    const batch=firestore.batch();
+    batch.set(firestore.doc(`users/${uid}`),{uid,lastBackupAt:ts(),lastBackupId:backupId},{merge:true});
+    batch.set(ref,payload);
+    await batch.commit();
+    return;
+   }
+   await ref.set(payload,{merge:true});
   },
   async putChunk(uid,deviceId,backupId,chunk){
    await firestore.doc(`users/${uid}/devices/${deviceId}/backups/${backupId}/chunks/${chunk.index}`).set(chunk);
@@ -83,9 +142,14 @@ function createCompatCloud(firestore){
    return snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>a.index-b.index);
   },
   async completeBackup(uid,deviceId,backupId){
-   const ref=firestore.doc(`users/${uid}/devices/${deviceId}/backups/${backupId}`);
-   await ref.update({status:'complete',completedAt:new Date()});
-   const snap=await ref.get();
+   const userRef=firestore.doc(`users/${uid}`);
+   const userSnap=await userRef.get();
+   const count=userSnap.exists&&Number.isFinite(userSnap.data()?.completeCount)?userSnap.data().completeCount:0;
+   const batch=firestore.batch();
+   batch.update(firestore.doc(`users/${uid}/devices/${deviceId}/backups/${backupId}`),{status:'complete',completedAt:ts()});
+   batch.set(userRef,{completeCount:count+1,lastCompletedBackupId:backupId,lastCompletedDeviceId:deviceId},{merge:true});
+   await batch.commit();
+   const snap=await firestore.doc(`users/${uid}/devices/${deviceId}/backups/${backupId}`).get();
    return {id:snap.id,...snap.data()};
   },
   async updateDevice(uid,deviceId,patch){
@@ -100,9 +164,19 @@ function createCompatCloud(firestore){
    return snap.docs.map(d=>({id:d.id,...d.data()}));
   },
   async deleteBackupTree(uid,deviceId,backupId){
+   const metaSnap=await firestore.doc(`users/${uid}/devices/${deviceId}/backups/${backupId}`).get();
+   const meta=metaSnap.exists?metaSnap.data():null;
    const chunks=await firestore.collection(`users/${uid}/devices/${deviceId}/backups/${backupId}/chunks`).get();
    for(const doc of chunks.docs)await doc.ref.delete();
-   await firestore.doc(`users/${uid}/devices/${deviceId}/backups/${backupId}`).delete();
+   const batch=firestore.batch();
+   batch.delete(firestore.doc(`users/${uid}/devices/${deviceId}/backups/${backupId}`));
+   if(meta?.status==='complete'){
+    const userRef=firestore.doc(`users/${uid}`);
+    const snap=await userRef.get();
+    const count=snap.exists&&Number.isFinite(snap.data()?.completeCount)?snap.data().completeCount:0;
+    batch.set(userRef,{completeCount:Math.max(0,count-1),lastDeletedBackupId:backupId,lastDeletedDeviceId:deviceId},{merge:true});
+   }
+   await batch.commit();
   }
  };
 }

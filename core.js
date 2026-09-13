@@ -65,7 +65,113 @@ export const MAX_BACKUP_CHUNKS=Math.ceil(MAX_BACKUP_BYTES/CHUNK_MAX_BYTES);
 export const INCOMPLETE_TTL_MS=7*24*60*60*1000;
 export const ownerOf=item=>item?.ownerUid||LOCAL_OWNER;
 export const sameOwner=(item,uid)=>ownerOf(item)===uid;
+export const BACKUP_CLOCK_INTERVAL_MS=60*1000;
 export function defaultChildId(uid){return uid===LOCAL_OWNER?'child_01':`child_01__${uid}`;}
+export function uniqueChildId(uid,occupied=new Set()){
+ const base=defaultChildId(uid);
+ if(!occupied.has(base))return base;
+ let n=2;
+ while(occupied.has(`${base}__${n}`))n+=1;
+ return `${base}__${n}`;
+}
+export function pickActiveChild(children,uid){
+ const scoped=(children||[]).filter(c=>sameOwner(c,uid));
+ return scoped.find(c=>c.id==='child_01'||c.id===defaultChildId(uid))||scoped[0]||null;
+}
+export function visibleRecordsForChild(records,child){
+ if(!child)return [];
+ return (records||[]).filter(r=>sameOwner(r,ownerOf(child))&&r.childId===child.id);
+}
+function isStubChild(child,records){
+ if(!child)return false;
+ const owned=(records||[]).filter(r=>r.childId===child.id&&sameOwner(r,ownerOf(child)));
+ return (child.name==='小孩'||!String(child.name||'').trim())&&(child.birthday==null||child.birthday==='')&&owned.length===0;
+}
+export function remapBackupChildIds(payload,uid,occupiedIds=new Set()){
+ const used=new Set(occupiedIds);
+ const idMap=new Map();
+ const children=[];
+ for(const child of payload.children||[]){
+  const reserved=uid!==LOCAL_OWNER&&child.id===defaultChildId(LOCAL_OWNER);
+  let nextId=child.id;
+  if(reserved||occupiedIds.has(child.id))nextId=uniqueChildId(uid,used);
+  if(used.has(nextId))nextId=uniqueChildId(uid,used);
+  idMap.set(child.id,nextId);
+  used.add(nextId);
+  children.push({...child,id:nextId});
+ }
+ const records=(payload.records||[]).map(r=>({...r,childId:idMap.get(r.childId)||r.childId}));
+ return {children,records,idMap,settings:payload.settings};
+}
+export function repairChildOwnership({children=[],records=[],uid}={}){
+ const nextChildren=children.map(c=>({...c}));
+ const nextRecords=records.map(r=>({...r}));
+ const byId=new Map(nextChildren.map(c=>[c.id,c]));
+ const mine=nextRecords.filter(r=>sameOwner(r,uid));
+ const needed=[...new Set(mine.map(r=>r.childId).filter(Boolean))];
+ const recordRemap=new Map();
+ const changes=[];
+ for(const childId of needed){
+  const child=byId.get(childId);
+  if(child&&sameOwner(child,uid))continue;
+  if(child&&!sameOwner(child,uid)&&isStubChild(child,nextRecords)){
+   child.ownerUid=uid;
+   changes.push({type:'reclaim',child});
+   continue;
+  }
+  if(child&&!sameOwner(child,uid)){
+   const existing=nextChildren.find(c=>sameOwner(c,uid));
+   let targetId=existing?.id;
+   if(!targetId){
+    targetId=uniqueChildId(uid,new Set(byId.keys()));
+    const created={id:targetId,name:child.name||'小孩',birthday:child.birthday??null,ownerUid:uid};
+    nextChildren.push(created);
+    byId.set(targetId,created);
+    changes.push({type:'create',child:created});
+   }
+   recordRemap.set(childId,targetId);
+   continue;
+  }
+  if(!child){
+   const created={id:childId,name:'小孩',birthday:null,ownerUid:uid};
+   nextChildren.push(created);
+   byId.set(childId,created);
+   changes.push({type:'create',child:created});
+  }
+ }
+ for(const rec of nextRecords){
+  if(sameOwner(rec,uid)&&recordRemap.has(rec.childId))rec.childId=recordRemap.get(rec.childId);
+ }
+ if(!nextChildren.some(c=>sameOwner(c,uid))){
+  const created={id:uniqueChildId(uid,new Set(nextChildren.map(c=>c.id))),name:'小孩',birthday:null,ownerUid:uid};
+  nextChildren.push(created);
+  changes.push({type:'create',child:created});
+ }
+ return {children:nextChildren,records:nextRecords,changes,recordRemap};
+}
+export function visibleAfterRepair({children,records,uid}){
+ const repaired=repairChildOwnership({children,records,uid});
+ const child=pickActiveChild(repaired.children,uid);
+ return {repaired,child,visible:visibleRecordsForChild(repaired.records,child)};
+}
+export function chartCaption({metric='seconds',start='',end=''}={}){
+ const individual=Boolean(start&&end&&start===end);
+ const ranged=Boolean(start||end);
+ if(metric==='seconds'){
+  if(individual)return '單日各筆連線；秒數越低越好。';
+  if(ranged)return '跨日顯示每日平均秒數；秒數越低越好。沒有測試的日期不補 0。';
+  return '未選日期時跨日顯示每日平均秒數；選同一天可看各筆連線。秒數越低越好。';
+ }
+ if(individual)return '單日各筆速度連線；沒有測試的次數不補 0。';
+ return '同一距離以每天各次速度的平均值呈現；沒有測試的日期不補 0。';
+}
+export function clockCooldownRemaining(lastClockWriteAt,now,interval=BACKUP_CLOCK_INTERVAL_MS){
+ if(!lastClockWriteAt)return 0;
+ const t=+new Date(lastClockWriteAt);
+ if(!Number.isFinite(t))return 0;
+ return Math.max(0,t+interval-now);
+}
+
 export function portableChild(c){return {id:c.id,name:c.name,birthday:c.birthday??null};}
 export function portableRecord(r){return {id:r.id,childId:r.childId,date:r.date,distance:r.distance,seconds:r.seconds,note:r.note||'',startType:r.startType||'',surface:r.surface||'',timingMethod:r.timingMethod||'',createdAt:r.createdAt,updatedAt:r.updatedAt};}
 export function portableSettings(settings,uid){
@@ -119,12 +225,16 @@ export function retryDelay(attempt,random=Math.random){
  const jitter=capped*0.2*(random()*2-1);
  return Math.round(Math.max(1000,capped+jitter));
 }
-export function classifyBackupError(error){
+export function classifyBackupError(error,context={}){
  const code=String(error?.code||error?.name||'');
  const message=String(error?.message||error||'');
  const text=`${code} ${message}`.toLowerCase();
  if(/unauth|id-token|requires.recent|need.?reauth|token.*expired/.test(text))return {fatal:true,kind:'reauth',code:'unauthenticated'};
- if(/permission|insufficient|unauthorized/.test(text))return {fatal:true,kind:'permission',code:'permission-denied'};
+ if(error?.kind==='cooldown'||/cooldown|冷卻/.test(text))return {fatal:false,kind:'cooldown',code:code||'unavailable'};
+ if(/permission|insufficient|unauthorized/.test(text)){
+  if(context.withinClockCooldown)return {fatal:false,kind:'cooldown',code:'permission-denied'};
+  return {fatal:true,kind:'permission',code:'permission-denied'};
+ }
  if(/resource-exhausted|quota|exceeded.*quota|resource_exhausted/.test(text))return {fatal:true,kind:'quota',code:'resource-exhausted'};
  if(/failed-precondition|aborted|unavailable|deadline|network|fetch|offline|failed to fetch/.test(text))return {fatal:false,kind:'network',code:'unavailable'};
  return {fatal:false,kind:'retry',code:code||'unknown'};

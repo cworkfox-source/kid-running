@@ -1,6 +1,6 @@
 import {
- LOCAL_OWNER,BACKUP_SCHEMA_VERSION,MAX_COMPLETE_VERSIONS,INCOMPLETE_TTL_MS,
- backupContent,backupLimitError,stableStringify,sha256,splitUtf8Chunks,retryDelay,classifyBackupError,sameOwner,defaultChildId
+ LOCAL_OWNER,BACKUP_SCHEMA_VERSION,MAX_COMPLETE_VERSIONS,INCOMPLETE_TTL_MS,BACKUP_CLOCK_INTERVAL_MS,
+ backupContent,backupLimitError,stableStringify,sha256,splitUtf8Chunks,retryDelay,classifyBackupError,sameOwner,defaultChildId,clockCooldownRemaining,remapBackupChildIds
 } from './core.js';
 
 function deviceLabel(deviceId){
@@ -23,6 +23,7 @@ export function describeBackupStatus(state){
  if(!user||!enabled)return {code:'not-enabled',text:'尚未啟用雲端備份',tone:'muted'};
  if(persistenceOk===false)return {code:'persistence',text:'無法長期記住登入，關閉分頁後需重新登入',tone:'warn'};
  if(fatalKind==='reauth'||lastError?.kind==='reauth')return {code:'reauth',text:'需重新登入後才能備份',tone:'error'};
+ if(fatalKind==='cooldown'||lastError?.kind==='cooldown')return {code:'cooldown',text:'備份間隔中，稍後自動再試',tone:'live'};
  if(fatalKind==='permission'||lastError?.kind==='permission')return {code:'permission',text:'備份權限不足',tone:'error'};
  if(fatalKind==='quota'||lastError?.kind==='quota')return {code:'quota',text:'備份配額已用盡',tone:'error'};
   if(paused)return {code:'paused',text:pending?'已暫停自動備份，尚有新變更':'已暫停自動備份',tone:'warn'};
@@ -65,6 +66,7 @@ export function createBackupService(deps){
   lockTtl=25000,
   keepVersions=MAX_COMPLETE_VERSIONS,
   incompleteTtlMs=INCOMPLETE_TTL_MS,
+  clockIntervalMs=BACKUP_CLOCK_INTERVAL_MS,
   onStatus=()=>{},
   sha=sha256,
   splitChunks=splitUtf8Chunks
@@ -166,7 +168,7 @@ export function createBackupService(deps){
   return {meta,text};
  }
 
- async function cleanupVersions(cloud,uid,deviceId,{keepBackupId}={}){
+ async function cleanupVersions(cloud,uid,deviceId,{keepBackupId,leaveRoom=false}={}){
   const devices=await cloud.listDevices(uid);
   const all=(await Promise.all(devices.map(async device=>(await cloud.listBackups(uid,resolveDeviceId(device))).map(backup=>({...backup,deviceId:backup.deviceId||resolveDeviceId(device)}))))).flat();
   const complete=all.filter(b=>b.status==='complete').sort((a,b)=>{
@@ -178,12 +180,13 @@ export function createBackupService(deps){
    return (bOk?tb:0)-(aOk?ta:0);
   });
   const protectedId=keepBackupId||null;
+  const limit=Math.max(0,leaveRoom?keepVersions-1:keepVersions);
   const kept=[];
   for(const backup of complete){
    if((backup.backupId||backup.id)===protectedId)kept.push(backup);
   }
   for(const backup of complete){
-   if(kept.length>=keepVersions)break;
+   if(kept.length>=limit)break;
    if(!kept.includes(backup))kept.push(backup);
   }
   const extra=complete.filter(b=>!kept.includes(b));
@@ -214,6 +217,9 @@ export function createBackupService(deps){
   });
   const existing=await cloud.getBackup(item.uid,item.deviceId,item.backupId);
   if(!existing){
+   const acc=await account(item.uid);
+   const wait=clockCooldownRemaining(acc.lastClockWriteAt||acc.lastSuccess?.completedAt,clock.now(),clockIntervalMs);
+   if(wait>0)throw Object.assign(Error('備份冷卻中，將於間隔後再試'),{code:'unavailable',kind:'cooldown',retryIn:wait});
    await cloud.putBackup(item.uid,item.deviceId,item.backupId,{
     localRevision:item.localRevision,
     contentHash:item.contentHash,
@@ -223,6 +229,8 @@ export function createBackupService(deps){
     status:'uploading',
     summary:item.summary
    },true);
+   const fresh=await account(item.uid);
+   await db.putAccount({...fresh,lastClockWriteAt:new Date(clock.now()).toISOString()});
   }else if(existing.status==='complete'){
    await cloud.updateDevice(item.uid,item.deviceId,{
     label:deviceLabel(item.deviceId),
@@ -243,6 +251,7 @@ export function createBackupService(deps){
    await db.heartbeatLock(tabId,lockTtl,clock.now());
   }
   await verifyUploaded(cloud,item,expected,item.contentHash);
+  await cleanupVersions(cloud,item.uid,item.deviceId,{keepBackupId:item.backupId,leaveRoom:true});
   const completed=await cloud.completeBackup(item.uid,item.deviceId,item.backupId);
   await verifyUploaded(cloud,item,expected,item.contentHash);
   if(completed.status!=='complete')throw Error('伺服器未確認完成');
@@ -330,15 +339,19 @@ export function createBackupService(deps){
       return {ok:true,completed:lastCompleted};
      }
     }catch(error){
-     const classified=classifyBackupError(error);
+     const accNow=await account(uid);
+     const lastAt=accNow.lastClockWriteAt||accNow.lastSuccess?.completedAt;
+     const remaining=clockCooldownRemaining(lastAt,clock.now(),clockIntervalMs);
+     const classified=classifyBackupError(error,{withinClockCooldown:remaining>0||error?.kind==='cooldown'});
      const attempts=(working.attempts||0)+1;
+     const cooldownWait=classified.kind==='cooldown'?Math.max(remaining,error?.retryIn||0,1000):0;
      const failed={
       ...working,
       status:classified.fatal?'failed-fatal':'queued',
       fatal:classified.fatal,
       attempts,
       lastError:{kind:classified.kind,code:classified.code,message:error.message||String(error),at:new Date(clock.now()).toISOString()},
-      nextRetryAt:classified.fatal?Number.MAX_SAFE_INTEGER:clock.now()+retryDelay(attempts-1,random)
+      nextRetryAt:classified.fatal?Number.MAX_SAFE_INTEGER:classified.kind==='cooldown'?clock.now()+cooldownWait:clock.now()+retryDelay(attempts-1,random)
      };
      await persistQueue(failed);
      const fresh=await account(uid);
@@ -448,8 +461,14 @@ export function createBackupService(deps){
    const userChildren=children.filter(c=>sameOwner(c,uid));
    const changes=[];
    if(!userRecords.length&&localRecords.length){
-    for(const rec of localRecords)changes.push({store:'records',value:{...rec,ownerUid:uid}});
-    for(const child of localChildren)changes.push({store:'children',value:{...child,ownerUid:uid}});
+    const occupied=new Set(children.filter(c=>!sameOwner(c,LOCAL_OWNER)&&!sameOwner(c,uid)).map(c=>c.id));
+    for(const child of userChildren)occupied.add(child.id);
+    const remapped=remapBackupChildIds({children:localChildren,records:localRecords},uid,occupied);
+    for(const rec of remapped.records)changes.push({store:'records',value:{...rec,ownerUid:uid}});
+    for(const child of remapped.children)changes.push({store:'children',value:{...child,ownerUid:uid}});
+    for(const child of localChildren){
+     if(remapped.idMap.get(child.id)!==child.id)changes.push({store:'children',delete:child.id});
+    }
    }else if(!userChildren.length){
     changes.push({store:'children',value:{id:defaultChildId(uid),name:'小孩',birthday:null,ownerUid:uid}});
    }

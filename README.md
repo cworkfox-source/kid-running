@@ -1,6 +1,6 @@
 # 小步快跑 · 兒童跑步成績追蹤
 
-手機優先、純前端、零執行期套件。資料保存在目前瀏覽器的 IndexedDB，不傳送到伺服器。
+手機優先、純前端。日常資料保存在目前瀏覽器的 IndexedDB；可選使用 Google 帳號把完整快照備份到 Firestore（版本備份，不是即時雙向同步）。
 
 ## 啟動
 
@@ -16,15 +16,58 @@ npm start
 npm test
 ```
 
+本機連 Firestore Emulator（規則與備份流程自測，不 deploy 正式環境）：
+
+```sh
+npm install --no-save firebase@11.1.0 @firebase/rules-unit-testing@4.0.1
+# 另開終端
+npm start
+# 瀏覽器開啟 http://localhost:3000/?emulator=1
+npm run test:emulator
+```
+
+`npm run test:emulator` 使用 `.firebaserc` 的 `emulator` 別名 `demo-kid-running`，不必登入正式專案。
+
 ## 功能
 
 - 首頁：今天日期、距離快捷鍵、記住上次距離、秒數快速輸入、備註與可選測試條件。
 - 本機文字解析：公尺／米／m、秒／s、7秒42、全形字元、日期省略年份、多行預覽與修改；確認後才原子性寫入。
 - 紀錄：日期排序、距離篩選、編輯、複製到表單、確認刪除、同距離前次比較、目前 PB（並列皆標示）。
 - 分析：相同小孩／距離比較、首筆到最新改善率、SVG 日期軸趨勢、可反轉 Y 軸、可展開原始數據表。
-- 設定：小孩名稱、JSON 全量備份與確認取代還原、CSV 匯出（BOM 與公式注入防護）。
+- 設定：小孩名稱、Google 帳號雲端版本備份、JSON 全量備份與確認取代還原、CSV 匯出（BOM 與公式注入防護）。
 - 異常值及疑似重複值需確認，絕不自動修正。
-- 基本 Service Worker 離線快取。未加入 PWA 安裝、帳號、同步、AI API 或多小孩切換。
+- 基本 Service Worker 離線快取。未加入 PWA 安裝、AI API、跨裝置即時雙向同步、家庭共編或多小孩切換。
+
+## Google 帳號與雲端版本備份
+
+- 本機 IndexedDB 仍是日常操作來源：先寫入本機成功，再排程雲端備份；雲端慢不會讓新增失敗。
+- 點「使用 Google 帳號啟用備份」後，同一網站來源、同一瀏覽器在正常情況下會用 Firebase Auth 本機持久保存，不必每次重登。文案「登入一次，之後自動備份」在清除網站資料、無痕、換機／換瀏覽器、或撤銷 Google 授權時不適用。
+- 若瀏覽器無法長期記住登入，會明確提示，不會改成短暫 session 還宣稱長期保存。
+- 所有權以 Firebase `uid` 為準，不用顯示名稱或 email。
+- 變更（成績增刪改、複製後確認新增、批次匯入、JSON 還原、小孩名稱、需跨機的顯示偏好）以遞增 revision + 穩定序列化 SHA-256 判斷，不靠筆數。速度／PB／進步率等衍生值不備份。
+- 本機交易成功後約 5 秒 debounce，持續改動會重設，最長約 30 秒強制嘗試；「立即備份」略過等待。內容沒變不會再建立成功版本。
+- 待備份佇列寫在 IndexedDB，斷線或重開後補傳。成功只在伺服器確認 `complete` 且塊數／摘要核對通過後才顯示「已備份」。`online` 事件只會檢查佇列。
+- 雲端路徑：`users/{uid}/devices/{deviceId}/backups/{backupId}`，內容分塊（≤256 KiB）在 `chunks` 子集合。每裝置保留最近 30 個**成功**版本；完成的版本不可改。
+- 換機：登入同一帳號 → 選成功版本（標來源裝置）→ 預覽後確認取代本機該帳號資料。這是選版取代，不是合併，也不會覆寫其他裝置既有雲端版本。
+- 可暫停自動備份：仍追蹤變更，恢復後補傳最新快照。
+- 不含：Google Drive、匿名驗證、跨裝置即時同步、自動合併、家庭共編、排程背景執行、給一般使用者的 Firebase 管理介面。
+
+### Firebase 專案現況（本 PR 不 deploy 規則／Hosting、不升 Blaze）
+
+Web config 可以公開，不是密鑰；真正保護靠 Auth + `firestore.rules`。請**不要**把 service account 私鑰或 OAuth client secret 放進倉庫或前端。`firebase-config.js` 已填入專案 `kid-running` 的公開 Web 設定。
+
+| 項目 | 狀態 |
+|---|---|
+| 專案 | `kid-running`（`.firebaserc` default） |
+| Google provider | 已啟用 |
+| 授權網域 | `localhost`、`cworkfox-source.github.io` |
+| Firestore | `(default)`，區域 `asia-east1` |
+| 正式 `firestore.rules` | **尚未部署**（依紅線，本 PR 不會代為 deploy） |
+| Auth domain | `kid-running.firebaseapp.com` |
+
+本機 Emulator：`http://localhost:3000/?emulator=1`。規則測試用別名 `demo-kid-running`（見 `.firebaserc` 的 `emulator`）。iPhone Safari 會優先走 redirect。
+
+Firebase JS SDK 釘死 **11.1.0**，由 CDN 載入。CDN 暫時失敗時本機頁面仍可記錄，只是雲端備份不可用。
 
 ## 資料與比較規則
 
@@ -34,13 +77,13 @@ npm test
 
 解析無日期使用裝置本地今天，無年份使用當年；來源文字存入備註。每行一筆，無單位秒數僅在距離移除後剩唯一數值時接受。多組數值或錯誤日期會拒絕，需修改原文再辨識。匯入存在錯誤列時不允許部分偷偷入庫。
 
-資料模型包含 Child、RunRecord（childId、原始距離與秒數、條件、備註、建立／修改時間）；不保存計算衍生值。JSON 格式為 `{ version: 1, exportedAt, children, records, settings }`；还原先驗證日期、數值、唯一 ID、childId 關聯與條件，再於同一交易取代，失敗會回滾。若備份有多名小孩會完整保留，但本版僅顯示 child_01 或第一名。
+資料模型包含 Child、RunRecord（childId、原始距離與秒數、條件、備註、建立／修改時間、ownerUid）；不保存計算衍生值。JSON 格式仍為 `{ version: 1, exportedAt, children, records, settings }`；還原先驗證日期、數值、唯一 ID、childId 關聯與條件，再於同一交易取代目前帳號資料，失敗會回滾。IndexedDB 升到 v2 只新增多餘 store 與 `ownerUid`，**不會清空舊紀錄**。
 
 ## 靜態部署
 
 公開網站：https://cworkfox-source.github.io/kid-running/
 
-GitHub Actions 會把 `index.html`、`styles.css`、`app.js`、`core.js`、`db.js`、`sw.js` 發到 GitHub Pages（無建置步驟）。資產路徑皆為相對路徑，可在專案子目錄下運作。`server.js` 僅供本機測試，不會上線。
+GitHub Actions 會把靜態檔（含 auth/backup/restore/firebase/cloud 模組）發到 GitHub Pages（無建置步驟）。資產路徑皆為相對路徑，可在專案子目錄下運作。`server.js` 僅供本機測試，不會上線。這個 workflow **不會**部署 Firebase 正式環境。
 
 首次啟用請到倉庫 **Settings → Pages → Build and deployment → Source** 選 **GitHub Actions**。若第一次 workflow 在開啟 Pages 前失敗，改完設定後到 **Actions** 重新執行 **Deploy static content to Pages**。
 
@@ -48,12 +91,10 @@ GitHub Actions 會把 `index.html`、`styles.css`、`app.js`、`core.js`、`db.j
 
 ## 注意
 
-資料僅存在目前來源、瀏覽器與裝置，清除網站資料可能永久遺失。固定使用同一網址並定期匯出 JSON，換網址或換手機前先備份。CSV 是分析用途，不支援作為完整還原來源。首次使用是空白資料，不插入示範成績。無年齡百分位或健康推論。
+資料主要存在目前來源、瀏覽器與裝置。啟用雲端備份後，成功版本可在同一 Google 帳號下換機還原；未備份的本機變更仍可能遺失。固定使用同一網址並定期匯出 JSON。CSV 是分析用途，不支援作為完整還原來源。首次使用是空白資料，不插入示範成績。無年齡百分位或健康推論。
 
 ## 驗證狀態
 
-核心自動測試 31 項通過（`npm test`），JavaScript 語法及 Git whitespace 檢查通過。
+見 `test/ACCEPTANCE.md`。`npm test` 含核心解析／備份狀態機／帳號隔離。Firestore Emulator 規則與實際上傳／還原見 `npm run test:emulator`。正式 rules 尚未部署，故對正式 Firestore 的寫入在規則生效前不可當成已上線。
 
-`scripts/browser-check.mjs` 包含手機新增／編輯／刪除／複製、預覽不入庫、PB、重新載入、JSON 還原、無效檔案、320–1280px 溢出、離線重開及新增的瀏覽器測試。本次執行環境未安裝 Chromium，下載逾時，故這些端對端案例尚未完成實測，亦尚未完成 iPhone Safari 視覺驗收。
-
-有 Playwright 與 Chromium 的開發環境可先啟動網站，再執行 `node scripts/browser-check.mjs`；若 Playwright 非本機相依套件，可用 `PLAYWRIGHT_MODULE` 指定其完整模組路徑。
+`scripts/browser-check.mjs` 包含手機新增／編輯／刪除／複製、預覽不入庫、PB、重新載入、JSON 還原、無效檔案、320–1280px 溢出、離線重開及新增的瀏覽器測試。iPhone Safari 真機登入持久請見驗收表 U02。

@@ -1,0 +1,54 @@
+rules_version='2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    match /users/{uid} {
+      allow read, create, update, delete: if isOwner(uid);
+
+      match /devices/{deviceId} {
+        allow read, create, update, delete: if isOwner(uid);
+
+        match /backups/{backupId} {
+          allow read: if isOwner(uid);
+          allow create: if isOwner(uid)
+            && request.resource.data.uid == uid
+            && request.resource.data.deviceId == deviceId
+            && request.resource.data.backupId == backupId
+            && request.resource.data.status == 'uploading'
+            && request.resource.data.keys().hasAll([
+              'schemaVersion','backupId','uid','deviceId','localRevision',
+              'contentHash','recordCount','childCount','chunkCount','status'
+            ]);
+          allow update: if isOwner(uid)
+            && resource.data.status == 'uploading'
+            && request.resource.data.status in ['uploading', 'complete']
+            && request.resource.data.uid == resource.data.uid
+            && request.resource.data.deviceId == resource.data.deviceId
+            && request.resource.data.backupId == resource.data.backupId
+            && request.resource.data.contentHash == resource.data.contentHash
+            && request.resource.data.localRevision == resource.data.localRevision;
+          allow delete: if isOwner(uid);
+
+          match /chunks/{chunkId} {
+            allow read: if isOwner(uid);
+            allow create: if isOwner(uid)
+              && int(chunkId) == request.resource.data.index
+              && get(/databases/$(database)/documents/users/$(uid)/devices/$(deviceId)/backups/$(backupId)).data.status == 'uploading';
+            allow update: if false;
+            allow delete: if isOwner(uid);
+          }
+        }
+      }
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

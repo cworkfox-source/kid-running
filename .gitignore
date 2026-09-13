@@ -3,3 +3,10 @@ node_modules/
 test-results/
 playwright-report/
 _site/
+firebase-config.local.js
+*-debug.log
+firebase-debug.log
+firestore-debug.log
+auth-debug.log
+ui-debug.log
+.emulator/

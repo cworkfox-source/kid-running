@@ -36,6 +36,10 @@ test('B01 本機有雲端無會上傳第一個完整版本',async()=>{
  assert.equal(backups[0].recordCount,1);
  const acc=await db.getAccount('user-a');
  assert.equal(acc.lastSuccess.backupId,'backup-fixed');
+ const versions=await listRestorableVersions(cloud,'user-a');
+ assert.equal(versions.length,1);
+ assert.equal(versions[0].backupId,'backup-fixed');
+ assert.ok((await cloud.listDevices('user-a')).some(d=>(d.deviceId||d.id)==='device-test-1'));
 });
 
 test('B02 兩邊空白時等待第一筆，不建空成功版',async()=>{
@@ -299,7 +303,10 @@ test('C04 帳號隔離：A 的資料不會進 B 的快照或佇列',async()=>{
 
 test('C05 登出取消排程但保留未完成佇列',async()=>{
  const db=createMemoryDB();
- const cloud={async putBackup(){throw Object.assign(Error('offline'),{code:'unavailable'});}};
+ const cloud={
+  async updateDevice(){},
+  async putBackup(){throw Object.assign(Error('offline'),{code:'unavailable'});}
+ };
  const user={uid:'user-a'};
  await seedUser(db,{uid:'user-a',records:[sampleRecord('user-a')],enabled:true});
  const backup=service(db,cloud,user);
@@ -328,6 +335,43 @@ test('S02 每裝置只保留最近 30 個成功版本',async()=>{
  }
  const complete=(await cloud.listBackups('user-a','device-test-1')).filter(b=>b.status==='complete');
  assert.equal(complete.length,3);
+});
+
+test('cleanup 即使 completedAt 缺失也不刪剛完成的版本',async()=>{
+ const db=createMemoryDB();
+ const inner=createMemoryCloud();
+ const cloud={
+  ...inner,
+  async completeBackup(uid,deviceId,backupId){
+   const done=await inner.completeBackup(uid,deviceId,backupId);
+   const next={...done};delete next.completedAt;
+   inner._state.backups.set(`${uid}/${deviceId}/${backupId}`,next);
+   return next;
+  },
+  putBackup:(...a)=>inner.putBackup(...a),
+  putChunk:(...a)=>inner.putChunk(...a),
+  getBackup:(...a)=>inner.getBackup(...a),
+  listChunks:(...a)=>inner.listChunks(...a),
+  updateDevice:(...a)=>inner.updateDevice(...a),
+  listDevices:(...a)=>inner.listDevices(...a),
+  listBackups:(...a)=>inner.listBackups(...a),
+  deleteBackupTree:(...a)=>inner.deleteBackupTree(...a)
+ };
+ const user={uid:'user-a'};
+ await seedUser(db,{uid:'user-a',records:[sampleRecord('user-a',{id:'r0'})],enabled:true});
+ let n=0;
+ const backup=service(db,cloud,user,{keepVersions:1,randomId:()=>'keep-'+n});
+ n=0;
+ await backup.flush('user-a');
+ n=1;
+ await db.write([{store:'records',value:sampleRecord('user-a',{id:'r1',seconds:7.5})}]);
+ await db.putAccount({...(await db.getAccount('user-a')),backupEnabled:true,pendingBackup:true,localRevision:2,waitingFirstRecord:false,lastSuccess:null});
+ const result=await backup.flush('user-a');
+ assert.equal(result.ok,true);
+ const complete=(await inner.listBackups('user-a','device-test-1')).filter(b=>b.status==='complete');
+ assert.ok(complete.some(b=>(b.backupId||b.id)==='keep-1'),'剛完成的版本必須留下');
+ const versions=await listRestorableVersions(inner,'user-a');
+ assert.ok(versions.some(v=>v.backupId==='keep-1'));
 });
 
 test('刪光成績會建空內容新版，且與首次空白區分',async()=>{

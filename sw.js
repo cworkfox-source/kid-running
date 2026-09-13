@@ -1,4 +1,4 @@
-const CACHE='kid-running-v9';
+const CACHE='kid-running-v10';
 const ASSETS=['./','./index.html','./styles.css','./app.js','./core.js','./db.js','./auth.js','./backup.js','./restore.js','./export.js','./firebase.js','./firebase-config.js','./cloud.js'];
 
 self.addEventListener('install',event=>{

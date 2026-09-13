@@ -62,12 +62,13 @@ export function createFirestoreCloud({firestore,fs}){
 
  async function listDevices(uid){
   const snap=await getDocs(collection(firestore,'users',uid,'devices'));
-  return snap.docs.map(d=>({id:d.id,...d.data()}));
+  return snap.docs.map(d=>({id:d.id,...d.data(),deviceId:d.data().deviceId||d.id}));
  }
 
  async function listBackups(uid,deviceId){
+  if(!uid||!deviceId)return [];
   const snap=await getDocs(collection(firestore,'users',uid,'devices',deviceId,'backups'));
-  return snap.docs.map(d=>({id:d.id,...d.data()}));
+  return snap.docs.map(d=>({id:d.id,...d.data(),deviceId:d.data().deviceId||deviceId,backupId:d.data().backupId||d.id}));
  }
 
  async function deleteChunk(uid,deviceId,backupId,index){
@@ -130,8 +131,11 @@ export function createMemoryCloud(){
    const id=`${uid}/${deviceId}`;
    devices.set(id,{...(devices.get(id)||{}),uid,deviceId,...patch,updatedAt:now()});
   },
-  async listDevices(uid){return [...devices.values()].filter(d=>d.uid===uid);},
+  async listDevices(uid){
+   return [...devices.values()].filter(d=>d.uid===uid).map(d=>({id:d.deviceId||d.id,...d}));
+  },
   async listBackups(uid,deviceId){
+   if(!uid||!deviceId)return [];
    return [...backups.values()].filter(b=>b.uid===uid&&b.deviceId===deviceId);
   },
   async deleteChunk(uid,deviceId,backupId,index){

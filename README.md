@@ -47,7 +47,7 @@ npm run test:emulator
 - 變更（成績增刪改、複製後確認新增、批次匯入、JSON 還原、小孩名稱、需跨機的顯示偏好）以遞增 revision + 穩定序列化 SHA-256 判斷，不靠筆數。速度／PB／進步率等衍生值不備份。
 - 本機交易成功後約 5 秒 debounce，持續改動會重設，最長約 30 秒強制嘗試；「立即備份」略過等待。內容沒變不會再建立成功版本。
 - 待備份佇列寫在 IndexedDB，斷線或重開後補傳；非致命上傳失敗會依退避在 `nextRetryAt` 自動再試，不必只靠重開或切回前景。成功只在伺服器確認 `complete` 且塊數／摘要核對通過後才顯示「已備份」。`online` 事件只會檢查佇列。
-- 雲端路徑：`users/{uid}/devices/{deviceId}/backups/{backupId}`，內容分塊（≤256 KiB）在 `chunks` 子集合。每帳號保留最近 10 個**成功**版本（伺服器 `completeCount` 上限 10）；完成的版本不可改。同一帳號新建備份需間隔 60 秒，且一次時間戳只綁定一個 backupId。
+- 雲端路徑：`users/{uid}/devices/{deviceId}/backups/{backupId}`，內容分塊（≤256 KiB）在 `chunks` 子集合。每帳號保留最近 10 個**成功**版本（伺服器 `completeCount` 上限 10）；完成的版本不可改。舊帳號先清理到可保留範圍，再初始化版本計數。同一帳號新建備份需間隔 60 秒，且一次時間戳只綁定一個 backupId。
 - 換機：登入同一帳號 → 選成功版本（標來源裝置）→ 預覽後確認取代本機該帳號資料。這是選版取代，不是合併，也不會覆寫其他裝置既有雲端版本。
 - 可暫停自動備份：仍追蹤變更，恢復後補傳最新快照。
 - 不含：Google Drive、匿名驗證、跨裝置即時同步、自動合併、家庭共編、排程背景執行、給一般使用者的 Firebase 管理介面。
@@ -87,7 +87,7 @@ GitHub Actions 會把靜態檔（含 auth/backup/restore/firebase/cloud 模組�
 
 首次啟用請到倉庫 **Settings → Pages → Build and deployment → Source** 選 **GitHub Actions**。若第一次 workflow 在開啟 Pages 前失敗，改完設定後到 **Actions** 重新執行 **Deploy static content to Pages**。
 
-每次更新前端須同步提高 `sw.js` 的 CACHE 版本（目前 `kid-running-v12`）。新 SW 安裝時會 `skipWaiting()`，啟用時刪除舊的 `kid-running-*` 快取並 `clients.claim()`；導覽／HTML 與所有 `.js` 採 network-first（離線才回退快取），一般重新整理即可拿到新頁面，不必手動清除網站資料。不提供安裝 UI。離線功能需首次成功載入、Service Worker 完成安裝後才能使用；行動裝置經區網 HTTP 不支援 Service Worker，請用 HTTPS 測試。
+每次更新前端須同步提高 `sw.js` 的 CACHE 版本（目前 `kid-running-v13`）。新 SW 安裝時會 `skipWaiting()`，啟用時刪除舊的 `kid-running-*` 快取並 `clients.claim()`；導覽／HTML 與所有 `.js` 採 network-first（離線才回退快取），一般重新整理即可拿到新頁面，不必手動清除網站資料。不提供安裝 UI。離線功能需首次成功載入、Service Worker 完成安裝後才能使用；行動裝置經區網 HTTP 不支援 Service Worker，請用 HTTPS 測試。
 
 ## 注意
 

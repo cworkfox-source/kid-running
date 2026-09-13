@@ -88,17 +88,17 @@ bob 讀 alice 路徑由 `assertFails(get)` 覆蓋（讀取拒絕不會出現在�
 | B07 | 權限／配額／需重登不密集無限重試 | 通過 | `npm test` |
 | B08 | 暫停仍追蹤，恢復後補傳最新快照 | 通過 | `npm test` |
 | B09 | 離線不宣告成功；online 事件不直接成功 | 通過 | `npm test` |
-| B10 | 非致命上傳失敗會用 `clock.setTimeout` 在 `nextRetryAt` 再跑 processQueue | 通過 | `npm test` fake timers |
+| B10 | 非致命上傳失敗會用 `clock.setTimeout` 在 `nextRetryAt` 再跑 processQueue | 通過 | 預設計時器以 `globalThis` 呼叫；`npm test` 另驗證 Window 綁定與不重入。 |
 | C01 | 分塊＋摘要核對通過才 complete | 通過 | `npm test` |
 | C02 | 還原前快照、單一交易取代 | 通過 | `npm test` |
 | C03 | 還原舊版不覆寫其他裝置新版 | 通過 | `npm test` |
 | C04 | 帳號隔離 A 不可給 B | 通過 | `npm test` |
 | C05 | 登出取消排程、保留未完成佇列 | 通過 | `npm test` |
-| S01 | Rules：不同 uid 不可互操作、禁止公開讀寫 | 程式已加強 | Emulator 測試仍為 SKIP（此環境無 Emulator）。新規則：建立備份須同批寫入 `lastBackupId`；60 秒內第二筆拒絕；`completeCount` 上限 10 且須與 complete／delete 同批。**正式專案仍是舊 ruleset `2bad0407-…`，需手動部署後才生效** |
+| S01 | Rules：不同 uid 不可互操作、禁止公開讀寫 | 通過 | `npm run test:emulator` 已驗證；建立備份須同批寫入 `lastBackupId`；60 秒內第二筆拒絕；`completeCount` 上限 10 且須與 complete／delete 同批。**正式規則仍需部署才生效**。 |
 | S02 | 每帳號保留最近 10 個成功版本 | 通過 | `npm test` 客戶端清理；rules `completeCount <= 10` 綁定實際 complete／delete |
 | U01 | Firebase SDK 失敗／未設定時本機仍可記錄 | 通過 | `npm test`；未登入時狀態不是「已備份」 |
 | U02 | iPhone Safari 真機 | 需使用者真機驗收 | 此環境無 iPhone。單元測試：一律先 popup，被擋才 redirect；`getRedirectResult` 失敗會進 `loadError` |
-| P0 | 還原後重新整理紀錄仍可見 | 通過 | 開機先等 auth 再 `ensureChild`；還原／JSON／啟用會把 `child_01` 改成帳號專用 ID；既有失聯紀錄可 reclaim 或 remap |
+| P0 | 還原後重新整理紀錄仍可見 | 通過 | 開機先等 auth 再 `ensureChild`；還原前停止既有上傳並清除舊佇列，還原後才重新排程；小孩與成績 ID 碰撞會 remap。 |
 | B11 | 60 秒冷卻被拒會重試，不當成權限不足 | 通過 | `npm test` |
 | A05 | 分析頁日期區間一鍵清除、跨日平均／單日各筆說明 | 通過 | `npm test` 與畫面 `#clear-analysis-range` |
 

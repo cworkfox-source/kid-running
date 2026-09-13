@@ -58,6 +58,18 @@ export function createFirestoreCloud({firestore,fs}){
   return snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>a.index-b.index);
  }
 
+ async function initializeCompleteCount(uid){
+  const userRef=doc(firestore,'users',uid);
+  const userSnap=await getDoc(userRef);
+  if(userSnap.exists()&&Number.isFinite(userSnap.data().completeCount))return userSnap.data().completeCount;
+  const devices=await listDevices(uid);
+  const groups=await Promise.all(devices.map(device=>listBackups(uid,device.deviceId||device.id)));
+  const completeCount=groups.flat().filter(backup=>backup.status==='complete').length;
+  if(completeCount>MAX_COMPLETE_VERSIONS)throw Object.assign(Error(`舊備份超過 ${MAX_COMPLETE_VERSIONS} 筆，清理後才能初始化版本計數`),{code:'failed-precondition'});
+  await setDoc(userRef,{completeCount,completeCountInitializedAt:serverTimestamp()},{merge:true});
+  return completeCount;
+ }
+
  async function completeBackup(uid,deviceId,backupId){
   const userRef=doc(firestore,'users',uid);
   const userSnap=await getDoc(userRef);
@@ -92,23 +104,19 @@ export function createFirestoreCloud({firestore,fs}){
  async function deleteBackupTree(uid,deviceId,backupId){
   const meta=await getBackup(uid,deviceId,backupId);
   const chunks=await listChunks(uid,deviceId,backupId);
-  for(let i=0;i<chunks.length;i+=400){
-   const batch=writeBatch(firestore);
-   for(const chunk of chunks.slice(i,i+400))batch.delete(chunkRef(uid,deviceId,backupId,chunk.index));
-   await batch.commit();
-  }
-  const last=writeBatch(firestore);
-  last.delete(backupRef(uid,deviceId,backupId));
+  const batch=writeBatch(firestore);
+  for(const chunk of chunks)batch.delete(chunkRef(uid,deviceId,backupId,chunk.index));
+  batch.delete(backupRef(uid,deviceId,backupId));
   if(meta?.status==='complete'){
    const userRef=doc(firestore,'users',uid);
    const snap=await getDoc(userRef);
-   const count=snap.exists()&&Number.isFinite(snap.data().completeCount)?snap.data().completeCount:0;
-   last.set(userRef,{completeCount:Math.max(0,count-1),lastDeletedBackupId:backupId,lastDeletedDeviceId:deviceId},{merge:true});
+   const hasCount=snap.exists()&&Number.isFinite(snap.data().completeCount);
+   if(hasCount)batch.set(userRef,{completeCount:Math.max(0,snap.data().completeCount-1),lastDeletedBackupId:backupId,lastDeletedDeviceId:deviceId},{merge:true});
   }
-  await last.commit();
+  await batch.commit();
  }
 
- return {pathNames,putBackup,putChunk,getBackup,listChunks,completeBackup,updateDevice,listDevices,listBackups,deleteChunk,deleteBackupTree};
+ return {pathNames,putBackup,putChunk,getBackup,listChunks,initializeCompleteCount,completeBackup,updateDevice,listDevices,listBackups,deleteChunk,deleteBackupTree};
 }
 
 export function createMemoryCloud(){
@@ -141,6 +149,11 @@ export function createMemoryCloud(){
   },
   async getBackup(uid,deviceId,backupId){return backups.get(key(uid,deviceId,backupId))||null;},
   async listChunks(uid,deviceId,backupId){return [...(chunks.get(key(uid,deviceId,backupId))||[])];},
+  async initializeCompleteCount(uid){
+   const count=[...backups.values()].filter(b=>b.uid===uid&&b.status==='complete').length;
+   if(count>MAX_COMPLETE_VERSIONS)throw Object.assign(Error(`已達每帳號 ${MAX_COMPLETE_VERSIONS} 個成功版本上限`),{code:'failed-precondition'});
+   return count;
+  },
   async completeBackup(uid,deviceId,backupId){
    const id=key(uid,deviceId,backupId);
    const prev=backups.get(id);

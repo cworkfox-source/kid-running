@@ -50,6 +50,8 @@ export function formatBackupTime(value){
 
 async function hashText(text,sha=sha256){return sha(text);}
 
+export const browserClock={now:()=>Date.now(),setTimeout:(fn,ms)=>globalThis.setTimeout(fn,ms),clearTimeout:id=>globalThis.clearTimeout(id)};
+
 export function createBackupService(deps){
  const {
   db,
@@ -57,7 +59,7 @@ export function createBackupService(deps){
   getUser,
   getAppMeta,
   isOnline=()=>true,
-  clock={now:()=>Date.now(),setTimeout:setTimeout,clearTimeout:clearTimeout},
+  clock=browserClock,
   randomId=()=>crypto.randomUUID(),
   random=Math.random,
   tabId,
@@ -80,6 +82,8 @@ export function createBackupService(deps){
  let uploading=false;
  let currentUid=null;
  let lastStatus=null;
+ let activeProcess=null;
+ let activeProcessUid=null;
 
  function emit(extra={}){
   lastStatus={...lastStatus,...extra,updatedAt:clock.now()};
@@ -179,11 +183,12 @@ export function createBackupService(deps){
    if(!aOk&&bOk)return 1;
    return (bOk?tb:0)-(aOk?ta:0);
   });
-  const protectedId=keepBackupId||null;
+  const protectedKey=keepBackupId?`${deviceId}:${keepBackupId}`:null;
+  const backupKey=backup=>`${backup.deviceId||deviceId}:${backup.backupId||backup.id}`;
   const limit=Math.max(0,leaveRoom?keepVersions-1:keepVersions);
   const kept=[];
   for(const backup of complete){
-   if((backup.backupId||backup.id)===protectedId)kept.push(backup);
+   if(backupKey(backup)===protectedKey)kept.push(backup);
   }
   for(const backup of complete){
    if(kept.length>=limit)break;
@@ -192,13 +197,16 @@ export function createBackupService(deps){
   const extra=complete.filter(b=>!kept.includes(b));
   const staleIncomplete=all.filter(b=>{
    if(b.status==='complete')return false;
-   if(protectedId&&(b.backupId||b.id)===protectedId)return false;
+   if(protectedKey&&backupKey(b)===protectedKey)return false;
    const created=+new Date(b.createdAt?.toDate?.()||b.createdAt||0);
    return created&&clock.now()-created>incompleteTtlMs;
   });
+  const failedComplete=[];
   for(const old of [...extra,...staleIncomplete]){
-   try{await cloud.deleteBackupTree(uid,old.deviceId||deviceId,old.backupId||old.id);}catch{/* 清失敗不影響本次成功 */}
+   try{await cloud.deleteBackupTree(uid,old.deviceId||deviceId,old.backupId||old.id);}
+   catch(error){if(extra.includes(old))failedComplete.push(error);}
   }
+  if(leaveRoom&&failedComplete.length)throw Object.assign(Error('無法清理舊備份，暫不建立新版本'),{code:'failed-precondition'});
  }
 
  async function uploadItem(item){
@@ -250,8 +258,12 @@ export function createBackupService(deps){
    if(!have.has(`${chunk.index}:${chunk.digest}`))await cloud.putChunk(item.uid,item.deviceId,item.backupId,chunk);
    await db.heartbeatLock(tabId,lockTtl,clock.now());
   }
+  if(canceled)throw Error('已取消');
   await verifyUploaded(cloud,item,expected,item.contentHash);
+  if(canceled)throw Error('已取消');
   await cleanupVersions(cloud,item.uid,item.deviceId,{keepBackupId:item.backupId,leaveRoom:true});
+  if(typeof cloud.initializeCompleteCount==='function')await cloud.initializeCompleteCount(item.uid);
+  if(canceled)throw Error('已取消');
   const completed=await cloud.completeBackup(item.uid,item.deviceId,item.backupId);
   await verifyUploaded(cloud,item,expected,item.contentHash);
   if(completed.status!=='complete')throw Error('伺服器未確認完成');
@@ -267,7 +279,7 @@ export function createBackupService(deps){
   return completed;
  }
 
-  async function processQueue(uid,{ignorePause=false}={}){
+  async function processQueueNow(uid,{ignorePause=false}={}){
   if(canceled)return {ok:false,reason:'canceled'};
   const user=getUser();
   if(!user||user.uid!==uid)return {ok:false,reason:'auth'};
@@ -296,7 +308,7 @@ export function createBackupService(deps){
     if(!queue.length){
      const made=await enqueueCurrent(uid,{ignorePause});
      if(!made?.item){
-      clearRetryTimer();
+      clearTimers();
       emit({uploading:false,pending:false,dirty:false,waitingFirst:Boolean(made?.waitingFirst),lastSuccess:(await account(uid)).lastSuccess});
       return {ok:true,unchanged:Boolean(made?.unchanged),waitingFirst:Boolean(made?.waitingFirst),completed:lastCompleted};
      }
@@ -334,7 +346,7 @@ export function createBackupService(deps){
       }
      });
      if(!stillPending){
-      clearRetryTimer();
+      clearTimers();
       emit({uploading:false,pending:false,dirty:false,lastSuccess:(await account(uid)).lastSuccess});
       return {ok:true,completed:lastCompleted};
      }
@@ -362,6 +374,7 @@ export function createBackupService(deps){
       if(classified.fatal)return {ok:false,fatal:true,error};
       return {ok:false,reason:canceled?'canceled':'offline',error};
      }
+     clearTimers();
      scheduleRetry(uid,failed.nextRetryAt);
      return {ok:false,error};
     }
@@ -375,12 +388,42 @@ export function createBackupService(deps){
     lastSuccess:accNow.lastSuccess,
     waitingFirst:accNow.waitingFirstRecord&&latest.recordCount===0
    });
-   if(!accNow.pendingBackup)clearRetryTimer();
+   if(!accNow.pendingBackup)clearTimers();
    return {ok:true,completed:lastCompleted};
   }finally{
    uploading=false;
    await db.releaseLock(tabId);
   }
+ }
+
+
+ function processQueue(uid,options={}){
+  if(activeProcess)return activeProcessUid===uid?activeProcess:Promise.resolve({ok:false,reason:'busy'});
+  activeProcessUid=uid;
+  const work=processQueueNow(uid,options);
+  activeProcess=Promise.resolve(work).finally(()=>{
+   activeProcess=null;
+   activeProcessUid=null;
+  });
+  return activeProcess;
+ }
+
+ async function discardQueuedSnapshots(uid){
+  const queue=await db.all('backupQueue');
+  const changes=queue.filter(item=>item.uid===uid&&item.status!=='complete').map(item=>({store:'backupQueue',delete:item.id}));
+  if(changes.length)await db.write(changes);
+ }
+
+ async function stopForReplacement({timeoutMs=10000}={}){
+  canceled=true;
+  clearTimers();
+  if(!activeProcess)return true;
+  let timeoutId=null;
+  try{return await Promise.race([
+   activeProcess.then(()=>true,()=>true),
+   new Promise(resolve=>{timeoutId=browserClock.setTimeout(()=>resolve(false),timeoutMs);})
+  ]);}
+  finally{if(timeoutId)browserClock.clearTimeout(timeoutId);}
  }
 
  function clearRetryTimer(){
@@ -411,7 +454,7 @@ export function createBackupService(deps){
  function schedule(uid){
   currentUid=uid;
   if(debounceTimer)clock.clearTimeout(debounceTimer);
-  debounceTimer=clock.setTimeout(()=>processQueue(uid).catch(()=>{}),debounceMs);
+  debounceTimer=clock.setTimeout(()=>{debounceTimer=null;processQueue(uid).catch(()=>{});},debounceMs);
   if(!forceTimer){
    forceStartedAt=clock.now();
    forceTimer=clock.setTimeout(()=>{forceTimer=null;processQueue(uid).catch(()=>{});},maxWaitMs);
@@ -447,6 +490,8 @@ export function createBackupService(deps){
   cancelUploads(){
    canceled=true;clearTimers();
   },
+  stopForReplacement,
+  discardQueuedSnapshots,
   resetCancel(){canceled=false;},
   isUploading:()=>uploading,
   async enableForUser(user){
@@ -463,7 +508,8 @@ export function createBackupService(deps){
    if(!userRecords.length&&localRecords.length){
     const occupied=new Set(children.filter(c=>!sameOwner(c,LOCAL_OWNER)&&!sameOwner(c,uid)).map(c=>c.id));
     for(const child of userChildren)occupied.add(child.id);
-    const remapped=remapBackupChildIds({children:localChildren,records:localRecords},uid,occupied);
+    const occupiedRecords=new Set(records.filter(r=>!sameOwner(r,LOCAL_OWNER)&&!sameOwner(r,uid)).map(r=>r.id));
+    const remapped=remapBackupChildIds({children:localChildren,records:localRecords},uid,occupied,occupiedRecords);
     for(const rec of remapped.records)changes.push({store:'records',value:{...rec,ownerUid:uid}});
     for(const child of remapped.children)changes.push({store:'children',value:{...child,ownerUid:uid}});
     for(const child of localChildren){

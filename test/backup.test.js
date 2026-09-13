@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {createBackupService,describeBackupStatus} from '../backup.js';
+import {createBackupService,describeBackupStatus,browserClock} from '../backup.js';
 import {createMemoryCloud} from '../cloud.js';
 import {restoreVersion,listRestorableVersions,downloadAndVerify} from '../restore.js';
 import {createMemoryDB,createClock,sampleChild,sampleRecord,seedUser} from './support.js';
@@ -545,3 +545,71 @@ test('啟用備份時會把 guest child_01 改成帳號專用 ID',async()=>{
  assert.equal(records.find(r=>r.id==='legacy').ownerUid,'user-a');
 });
 
+
+test('預設瀏覽器計時器以 Window/globalThis 身分呼叫',()=>{
+ const originalSet=globalThis.setTimeout;
+ const originalClear=globalThis.clearTimeout;
+ let setThis=null,clearThis=null;
+ try{
+  globalThis.setTimeout=function(){setThis=this;return 1;};
+  globalThis.clearTimeout=function(){clearThis=this;};
+  browserClock.setTimeout(()=>{},1);
+  browserClock.clearTimeout(1);
+  assert.equal(setThis,globalThis);
+  assert.equal(clearThis,globalThis);
+ }finally{
+  globalThis.setTimeout=originalSet;
+  globalThis.clearTimeout=originalClear;
+ }
+});
+
+test('同一帳號同時觸發備份時只執行一個上傳工作',async()=>{
+ const db=createMemoryDB();
+ const inner=createMemoryCloud();
+ let release;
+ const gate=new Promise(resolve=>{release=resolve;});
+ let calls=0;
+ const cloud={
+  ...inner,
+  async putBackup(...args){calls+=1;await gate;return inner.putBackup(...args);},
+  putChunk:(...a)=>inner.putChunk(...a),getBackup:(...a)=>inner.getBackup(...a),listChunks:(...a)=>inner.listChunks(...a),
+  initializeCompleteCount:(...a)=>inner.initializeCompleteCount(...a),completeBackup:(...a)=>inner.completeBackup(...a),
+  updateDevice:(...a)=>inner.updateDevice(...a),listDevices:(...a)=>inner.listDevices(...a),listBackups:(...a)=>inner.listBackups(...a),deleteBackupTree:(...a)=>inner.deleteBackupTree(...a)
+ };
+ await seedUser(db,{uid:'user-a',records:[sampleRecord('user-a')],enabled:true});
+ const backup=service(db,cloud,{uid:'user-a'});
+ const first=backup.flush('user-a');
+ await waitUntil(()=>calls===1);
+ const second=backup.checkQueue('user-a');
+ release();
+ const [a,b]=await Promise.all([first,second]);
+ assert.equal(a.ok,true);
+ assert.equal(b.ok,true);
+ assert.equal(calls,1);
+});
+
+test('還原前停止上傳會保留佇列資料且不完成舊快照',async()=>{
+ const db=createMemoryDB();
+ const inner=createMemoryCloud();
+ let release;
+ const gate=new Promise(resolve=>{release=resolve;});
+ const cloud={
+  ...inner,
+  async updateDevice(...args){await gate;return inner.updateDevice(...args);},
+  putBackup:(...a)=>inner.putBackup(...a),putChunk:(...a)=>inner.putChunk(...a),getBackup:(...a)=>inner.getBackup(...a),listChunks:(...a)=>inner.listChunks(...a),
+  initializeCompleteCount:(...a)=>inner.initializeCompleteCount(...a),completeBackup:(...a)=>inner.completeBackup(...a),
+  listDevices:(...a)=>inner.listDevices(...a),listBackups:(...a)=>inner.listBackups(...a),deleteBackupTree:(...a)=>inner.deleteBackupTree(...a)
+ };
+ await seedUser(db,{uid:'user-a',records:[sampleRecord('user-a')],enabled:true});
+ const backup=service(db,cloud,{uid:'user-a'});
+ const flushing=backup.flush('user-a');
+ await new Promise(resolve=>setImmediate(resolve));
+ const stopping=backup.stopForReplacement({timeoutMs:100});
+ release();
+ assert.equal(await stopping,true);
+ const result=await flushing;
+ assert.equal(result.reason,'canceled');
+ assert.equal((await inner.listBackups('user-a','device-test-1')).filter(item=>item.status==='complete').length,0);
+ await backup.discardQueuedSnapshots('user-a');
+ assert.equal((await db.all('backupQueue')).length,0);
+});

@@ -41,8 +41,10 @@ export function triggerDownload({filename,content,mimeType,document:doc=globalTh
   try{a.remove?.();}catch{/* ignore */}
   try{urlApi.revokeObjectURL(url);}catch{/* ignore */}
  };
- if(typeof globalThis.setTimeout==='function')globalThis.setTimeout(cleanup,30000);
- else cleanup();
+ if(typeof globalThis.setTimeout==='function'){
+  const timer=globalThis.setTimeout(cleanup,30000);
+  timer?.unref?.();
+ }else cleanup();
  return {invoked:true,supported,inert:!supported};
 }
 

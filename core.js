@@ -74,6 +74,14 @@ export function uniqueChildId(uid,occupied=new Set()){
  while(occupied.has(`${base}__${n}`))n+=1;
  return `${base}__${n}`;
 }
+export function uniqueRecordId(id,uid,occupied=new Set()){
+ const safeUid=String(uid||'user').replace(/[^A-Za-z0-9_-]/g,'_').slice(0,48)||'user';
+ const base=`${String(id||'record')}__${safeUid}`;
+ if(!occupied.has(base))return base;
+ let n=2;
+ while(occupied.has(`${base}__${n}`))n+=1;
+ return `${base}__${n}`;
+}
 export function pickActiveChild(children,uid){
  const scoped=(children||[]).filter(c=>sameOwner(c,uid));
  return scoped.find(c=>c.id==='child_01'||c.id===defaultChildId(uid))||scoped[0]||null;
@@ -87,9 +95,11 @@ function isStubChild(child,records){
  const owned=(records||[]).filter(r=>r.childId===child.id&&sameOwner(r,ownerOf(child)));
  return (child.name==='小孩'||!String(child.name||'').trim())&&(child.birthday==null||child.birthday==='')&&owned.length===0;
 }
-export function remapBackupChildIds(payload,uid,occupiedIds=new Set()){
+export function remapBackupChildIds(payload,uid,occupiedIds=new Set(),occupiedRecordIds=new Set()){
  const used=new Set(occupiedIds);
+ const usedRecords=new Set(occupiedRecordIds);
  const idMap=new Map();
+ const recordIdMap=new Map();
  const children=[];
  for(const child of payload.children||[]){
   const reserved=uid!==LOCAL_OWNER&&child.id===defaultChildId(LOCAL_OWNER);
@@ -100,9 +110,16 @@ export function remapBackupChildIds(payload,uid,occupiedIds=new Set()){
   used.add(nextId);
   children.push({...child,id:nextId});
  }
- const records=(payload.records||[]).map(r=>({...r,childId:idMap.get(r.childId)||r.childId}));
- return {children,records,idMap,settings:payload.settings};
+ const records=(payload.records||[]).map(r=>{
+  let id=r.id;
+  if(usedRecords.has(id))id=uniqueRecordId(id,uid,usedRecords);
+  usedRecords.add(id);
+  recordIdMap.set(r.id,id);
+  return {...r,id,childId:idMap.get(r.childId)||r.childId};
+ });
+ return {children,records,idMap,recordIdMap,settings:payload.settings};
 }
+
 export function repairChildOwnership({children=[],records=[],uid}={}){
  const nextChildren=children.map(c=>({...c}));
  const nextRecords=records.map(r=>({...r}));

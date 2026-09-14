@@ -138,15 +138,11 @@ export function repairChildOwnership({children=[],records=[],uid}={}){
    continue;
   }
   if(child&&!sameOwner(child,uid)){
-   const existing=nextChildren.find(c=>sameOwner(c,uid));
-   let targetId=existing?.id;
-   if(!targetId){
-    targetId=uniqueChildId(uid,new Set(byId.keys()));
-    const created={id:targetId,name:child.name||'小孩',birthday:child.birthday??null,ownerUid:uid};
-    nextChildren.push(created);
-    byId.set(targetId,created);
-    changes.push({type:'create',child:created});
-   }
+   const targetId=uniqueChildId(uid,new Set(byId.keys()));
+   const created={id:targetId,name:child.name||'小孩',birthday:child.birthday??null,ownerUid:uid};
+   nextChildren.push(created);
+   byId.set(targetId,created);
+   changes.push({type:'create',child:created,sourceChildId:childId});
    recordRemap.set(childId,targetId);
    continue;
   }
@@ -166,6 +162,10 @@ export function repairChildOwnership({children=[],records=[],uid}={}){
   changes.push({type:'create',child:created});
  }
  return {children:nextChildren,records:nextRecords,changes,recordRemap};
+}
+export function safeFilenamePart(value,fallback='child'){
+ const clean=String(value??'').normalize('NFKC').replace(/[<>:"/\\|?*\u0000-\u001F]/g,'-').replace(/[. ]+$/g,'').trim().slice(0,40);
+ return clean||fallback;
 }
 export function visibleAfterRepair({children,records,uid}){
  const repaired=repairChildOwnership({children,records,uid});

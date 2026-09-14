@@ -58,6 +58,26 @@ test('B02 兩邊空白時等待第一筆，不建空成功版',async()=>{
  assert.equal(status.code,'waiting-first');
 });
 
+test('B02a 已新增或命名小孩時，即使沒有成績也會建立完整版本',async()=>{
+ const db=createMemoryDB();
+ const cloud=createMemoryCloud();
+ const user={uid:'user-a'};
+ const children=[
+  {...sampleChild('user-a','child_01__user-a'),name:'小安'},
+  {...sampleChild('user-a','child_01__user-a__2'),name:'小樂'}
+ ];
+ await seedUser(db,{uid:'user-a',records:[],children,enabled:true,waitingFirst:true});
+ const backup=service(db,cloud,user);
+ const result=await backup.flush('user-a');
+ assert.equal(result.ok,true);
+ const versions=await cloud.listBackups('user-a','device-test-1');
+ assert.equal(versions.length,1);
+ assert.equal(versions[0].status,'complete');
+ assert.equal(versions[0].recordCount,0);
+ assert.equal(versions[0].childCount,2);
+ assert.equal((await db.getAccount('user-a')).waitingFirstRecord,false);
+});
+
 test('B03 debounce 5 秒，持續改動重設，最長等待後仍會備份',async()=>{
  const db=createMemoryDB();
  const cloud=createMemoryCloud();
@@ -543,6 +563,26 @@ test('啟用備份時會把 guest child_01 改成帳號專用 ID',async()=>{
  assert.ok(children.some(c=>c.id==='child_01__user-a'&&c.ownerUid==='user-a'));
  assert.equal(records.find(r=>r.id==='legacy').childId,'child_01__user-a');
  assert.equal(records.find(r=>r.id==='legacy').ownerUid,'user-a');
+});
+
+test('訪客新增小孩但尚無成績，登入啟用後仍會完整移轉並備份',async()=>{
+ const db=createMemoryDB();
+ const cloud=createMemoryCloud();
+ const children=[
+  {...sampleChild(LOCAL_OWNER,'child_01'),name:'小安'},
+  {...sampleChild(LOCAL_OWNER,'child_01__2'),name:'小樂'}
+ ];
+ await seedUser(db,{uid:LOCAL_OWNER,children,records:[],enabled:false});
+ const backup=service(db,cloud,{uid:'user-a'});
+ const result=await backup.enableForUser({uid:'user-a'});
+ assert.ok(['upload-first','already-synced'].includes(result.action));
+ await backup.flush('user-a');
+ const migrated=(await db.all('children')).filter(child=>child.ownerUid==='user-a');
+ assert.deepEqual(migrated.map(child=>child.name).sort(),['小安','小樂']);
+ assert.equal((await db.all('records')).filter(record=>record.ownerUid==='user-a').length,0);
+ const versions=await cloud.listBackups('user-a','device-test-1');
+ assert.equal(versions.some(version=>version.status==='complete'&&version.childCount===2&&version.recordCount===0),true);
+ backup.cancelUploads();
 });
 
 

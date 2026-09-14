@@ -110,13 +110,18 @@ export function createBackupService(deps){
   return {latestDate:latest,recordCount:payload.records.length,childCount:payload.children.length};
  }
 
+ function hasMeaningfulChildData(payload){
+  const kids=payload.children||[];
+  return kids.length>1||kids.some(child=>String(child.name||'').trim()!=='小孩'||Boolean(child.birthday));
+ }
+
   async function enqueueCurrent(uid,{allowEmpty=false,ignorePause=false}={}){
   const snap=await snapshotFor(uid);
   const acc=snap.account;
   if(!acc.backupEnabled)return null;
   if(acc.backupPaused&&!ignorePause)return {paused:true,snap};
   if(snap.limitError){await db.putAccount({...acc,pendingBackup:true,lastError:{kind:'quota',code:'resource-exhausted',message:snap.limitError.message}});return {limitError:snap.limitError,snap};}
-  if(snap.recordCount===0&&acc.waitingFirstRecord&&!allowEmpty){
+  if(snap.recordCount===0&&!hasMeaningfulChildData(snap.payload)&&acc.waitingFirstRecord&&!allowEmpty){
    await db.putAccount({...acc,pendingBackup:false});
    return {waitingFirst:true,snap};
   }
@@ -505,7 +510,7 @@ export function createBackupService(deps){
    const userRecords=records.filter(r=>sameOwner(r,uid));
    const userChildren=children.filter(c=>sameOwner(c,uid));
    const changes=[];
-   if(!userRecords.length&&localRecords.length){
+   if(!userRecords.length&&(localRecords.length||hasMeaningfulChildData({children:localChildren}))){
     const occupied=new Set(children.filter(c=>!sameOwner(c,LOCAL_OWNER)&&!sameOwner(c,uid)).map(c=>c.id));
     for(const child of userChildren)occupied.add(child.id);
     const occupiedRecords=new Set(records.filter(r=>!sameOwner(r,LOCAL_OWNER)&&!sameOwner(r,uid)).map(r=>r.id));
@@ -520,7 +525,7 @@ export function createBackupService(deps){
    }
    if(changes.length)await db.write(changes);
    const bound=await snapshotFor(uid);
-   const emptyLocal=bound.recordCount===0;
+   const emptyLocal=bound.recordCount===0&&!hasMeaningfulChildData(bound.payload);
    const cloud=getCloud();
    let remote=[];
    if(cloud){

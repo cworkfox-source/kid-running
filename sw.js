@@ -1,4 +1,5 @@
-const CACHE='kid-running-v13';
+const CACHE='kid-running-v14';
+const NETWORK_TIMEOUT_MS=1800;
 const ASSETS=['./','./index.html','./styles.css','./app.js','./core.js','./db.js','./auth.js','./backup.js','./restore.js','./export.js','./firebase.js','./firebase-config.js','./cloud.js'];
 
 self.addEventListener('install',event=>{
@@ -39,17 +40,27 @@ function putInCache(request,response){
  caches.open(CACHE).then(cache=>cache.put(request,copy)).catch(()=>{});
 }
 
+async function cachedFallback(request){
+ const cached=await caches.match(request);
+ if(cached)return cached;
+ if(request.mode==='navigate'||(request.headers.get('accept')||'').includes('text/html')){
+  return (await caches.match('./index.html'))||(await caches.match('./'));
+ }
+ return Response.error();
+}
+
 function networkFirst(request){
- return fetch(request).then(response=>{
+ const network=fetch(request).then(response=>{
   putInCache(request,response);
   return response;
+ });
+ const timeout=new Promise(resolve=>setTimeout(()=>resolve(null),NETWORK_TIMEOUT_MS));
+ return Promise.race([network,timeout]).then(async response=>{
+  if(response)return response;
+  const cached=await cachedFallback(request);
+  return cached.type==='error'?network:cached;
  }).catch(async()=>{
-  const cached=await caches.match(request);
-  if(cached)return cached;
-  if(request.mode==='navigate'||(request.headers.get('accept')||'').includes('text/html')){
-   return (await caches.match('./index.html'))||(await caches.match('./'));
-  }
-  return Response.error();
+  return cachedFallback(request);
  });
 }
 

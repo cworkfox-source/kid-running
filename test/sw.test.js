@@ -28,6 +28,12 @@ test('HTML／導覽與 app.js 為 network-first，且只攔 same-origin GET',()=
  assert.match(sw,/type\s*!==\s*['"]opaque['"]/);
 });
 
+test('慢網路會在短暫等待後回退既有快取',()=>{
+ assert.match(sw,/NETWORK_TIMEOUT_MS\s*=\s*1800/);
+ assert.match(sw,/Promise\.race\(\[network,timeout\]\)/);
+ assert.match(sw,/cachedFallback\(request\)/);
+});
+
 test('Pages assemble 仍複製 sw.js；註冊時不走 HTTP 快取 SW 腳本',()=>{
  assert.match(pages,/\bsw\.js\b/);
  assert.match(pages,/\bexport\.js\b/);

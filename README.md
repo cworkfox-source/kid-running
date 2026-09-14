@@ -34,9 +34,9 @@ npm run test:emulator
 - 本機文字解析：公尺／米／m、秒／s、7秒42、全形字元、日期省略年份、多行預覽與修改；確認後才原子性寫入。
 - 紀錄：日期排序、距離篩選、編輯、複製到表單、確認刪除、同距離前次比較、目前 PB（並列皆標示），以及手動掃描「日期＋距離＋秒數」完全相同的疑似重複資料後逐筆選擇刪除。
 - 分析：相同小孩／距離比較、首筆到最新改善率、日期區間篩選與一鍵清除、SVG 日期軸趨勢、可反轉秒數 Y 軸、單日按距離統計；跨日顯示每日平均，選同一天則各筆連線。速度模式採同日各次 m/s 的平均值顯示。
-- 設定：小孩名稱、Google 帳號雲端版本備份、JSON 全量備份與確認取代還原、CSV 匯出（BOM 與公式注入防護）。
+- 設定：新增、改名與切換小孩；每位小孩的紀錄、PB 與分析分開顯示。Google 帳號雲端版本備份、JSON 全量備份與確認取代還原、CSV 匯出（BOM 與公式注入防護）。
 - 異常值及疑似重複值需確認，絕不自動修正。
-- 基本 Service Worker 離線快取。未加入 PWA 安裝、AI API、跨裝置即時雙向同步、家庭共編或多小孩切換。
+- 基本 Service Worker 離線快取。未加入 PWA 安裝、AI API、跨裝置即時雙向同步或家庭共編。
 
 ## Google 帳號與雲端版本備份
 
@@ -77,7 +77,7 @@ Firebase JS SDK 釘死 **11.1.0**，由 CDN 載入。CDN 暫時失敗時本機�
 
 解析無日期使用裝置本地今天，無年份使用當年；來源文字存入備註。每行一筆，無單位秒數僅在距離移除後剩唯一數值時接受。多組數值或錯誤日期會拒絕，需修改原文再辨識。匯入存在錯誤列時不允許部分偷偷入庫。
 
-資料模型包含 Child、RunRecord（childId、原始距離與秒數、條件、備註、建立／修改時間、ownerUid）；不保存計算衍生值。JSON 格式仍為 `{ version: 1, exportedAt, children, records, settings }`；還原先驗證日期、數值、唯一 ID、childId 關聯與條件，再於同一交易取代目前帳號資料，失敗會回滾。IndexedDB 升到 v2 只新增多餘 store 與 `ownerUid`，**不會清空舊紀錄**。
+資料模型包含 Child、RunRecord（childId、原始距離與秒數、條件、備註、建立／修改時間、ownerUid）；不保存計算衍生值。每個帳號在這台裝置最後選取的小孩只作本機偏好，不放進 JSON 或雲端版本。JSON 格式仍為 `{ version: 1, exportedAt, children, records, settings }`；還原先驗證日期、數值、唯一 ID、childId 關聯與條件，再於同一交易取代目前帳號資料，失敗會回滾。IndexedDB 升到 v2 只新增多餘 store 與 `ownerUid`，**不會清空舊紀錄**。
 
 ## 靜態部署
 
@@ -87,7 +87,7 @@ GitHub Actions 會把靜態檔（含 auth/backup/restore/firebase/cloud 模組�
 
 首次啟用請到倉庫 **Settings → Pages → Build and deployment → Source** 選 **GitHub Actions**。若第一次 workflow 在開啟 Pages 前失敗，改完設定後到 **Actions** 重新執行 **Deploy static content to Pages**。
 
-每次更新前端須同步提高 `sw.js` 的 CACHE 版本（目前 `kid-running-v13`）。新 SW 安裝時會 `skipWaiting()`，啟用時刪除舊的 `kid-running-*` 快取並 `clients.claim()`；導覽／HTML 與所有 `.js` 採 network-first（離線才回退快取），一般重新整理即可拿到新頁面，不必手動清除網站資料。不提供安裝 UI。離線功能需首次成功載入、Service Worker 完成安裝後才能使用；行動裝置經區網 HTTP 不支援 Service Worker，請用 HTTPS 測試。
+每次更新前端須同步提高 `sw.js` 的 CACHE 版本（目前 `kid-running-v14`）。新 SW 安裝時會 `skipWaiting()`，啟用時刪除舊的 `kid-running-*` 快取並 `clients.claim()`；導覽／HTML 與所有 `.js` 採 network-first（離線才回退快取），一般重新整理即可拿到新頁面，不必手動清除網站資料。不提供安裝 UI。離線功能需首次成功載入、Service Worker 完成安裝後才能使用；行動裝置經區網 HTTP 不支援 Service Worker，請用 HTTPS 測試。
 
 ## 注意
 

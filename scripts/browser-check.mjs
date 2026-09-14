@@ -8,7 +8,7 @@ const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
 const browser=await chromium.launch({headless:true});
 const context=await browser.newContext({viewport:{width:390,height:844},deviceScaleFactor:1});
 const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
-page.on('dialog',dialog=>dialog.accept());
+let nextDialog='accept';page.on('dialog',dialog=>{const action=nextDialog;nextDialog='accept';return action==='dismiss'?dialog.dismiss():dialog.accept();});
 const count=()=>page.evaluate(async()=>{const {all}=await import('./db.js');return (await all('records')).length;});
 const nav=async name=>page.locator(`nav [data-page="${name}"]`).click();
 try{
@@ -35,9 +35,11 @@ try{
  for(const width of [320,390,768,1280]){await page.setViewportSize({width,height:900});for(const route of ['home','records','analysis','settings']){await nav(route);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`${width}px ${route} overflow`);}}
  await page.setViewportSize({width:1280,height:1000});await nav('home');await page.screenshot({path:join(artifactDir,'desktop-home.png'),fullPage:true});
  await page.evaluate(()=>navigator.serviceWorker.ready);await context.setOffline(true);await page.reload();await page.locator('#seconds').waitFor();assert.equal(await count(),4);await page.locator('#seconds').fill('7.2');await page.locator('.add').click();await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('新個人最佳'));assert.equal(await count(),5);
- await context.setOffline(false);await nav('settings');await page.locator('#new-child-name').fill('小安');await page.getByRole('button',{name:'＋ 新增小孩',exact:true}).click();await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('已新增小跑者：小安'));assert.equal(await page.locator('#active-child').inputValue(),'child_01__2');
+ await context.setOffline(false);await nav('home');await page.locator('#seconds').fill('9.1');await nav('settings');await page.locator('#new-child-name').fill('不要新增');nextDialog='dismiss';await page.getByRole('button',{name:'＋ 新增小孩',exact:true}).click();assert.equal(await page.locator('#active-child option').count(),1);await nav('home');assert.equal(await page.locator('#seconds').inputValue(),'9.1');await page.locator('#seconds').fill('');
+ await nav('settings');await page.locator('#new-child-name').fill('小安');await page.getByRole('button',{name:'＋ 新增小孩',exact:true}).click();await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('已新增小跑者：小安'));assert.equal(await page.locator('#active-child').inputValue(),'child_01__2');
  await nav('home');await page.locator('#seconds').fill('8.2');await page.locator('.add').click();await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('已新增'));assert.equal(await count(),6);
+ await nav('settings');await page.locator('#new-child-name').fill('小樂');await page.getByRole('button',{name:'＋ 新增小孩',exact:true}).click();assert.equal(await page.locator('#active-child').inputValue(),'child_01__3');await nav('records');assert.equal(await page.locator('.record').count(),0);
  await nav('settings');await page.locator('#active-child').selectOption('child_01');await nav('records');assert.equal(await page.locator('.record').count(),5);
- await nav('settings');await page.locator('#active-child').selectOption('child_01__2');await nav('records');assert.equal(await page.locator('.record').count(),1);await page.reload();await page.locator('#seconds').waitFor();await nav('records');assert.equal(await page.locator('.record').count(),1);
+ await nav('settings');await page.locator('#active-child').selectOption('child_01__2');assert.match(await page.locator('#export-csv').innerText(),/小安/);await nav('records');assert.equal(await page.locator('.record').count(),1);await page.reload();await page.locator('.record').waitFor();assert.equal(await page.locator('.record').count(),1);
  assert.deepEqual(errors,[]);console.log('PASS: mobile CRUD, preview, PB, persistence, backup restore, invalid import, responsive 320–1280px, offline reload/write, child add/switch/persistence; no browser errors.');
 }finally{await browser.close();}

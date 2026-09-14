@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {parseLine,parseText,validDate,validate,speed,summary,improvement,warnings,csv,validateBackup,stableStringify,backupContent,contentHash,splitUtf8Chunks,retryDelay,classifyBackupError,LOCAL_OWNER,duplicateGroups,dailyStatistics,chartSeries,remapBackupChildIds,repairChildOwnership,visibleAfterRepair,chartCaption,clockCooldownRemaining,BACKUP_CLOCK_INTERVAL_MS,defaultChildId,pickActiveChild} from '../core.js';
+import {parseLine,parseText,validDate,validate,speed,summary,improvement,warnings,csv,validateBackup,stableStringify,backupContent,contentHash,splitUtf8Chunks,retryDelay,classifyBackupError,LOCAL_OWNER,duplicateGroups,dailyStatistics,chartSeries,remapBackupChildIds,repairChildOwnership,visibleAfterRepair,chartCaption,clockCooldownRemaining,BACKUP_CLOCK_INTERVAL_MS,defaultChildId,pickActiveChild,safeFilenamePart} from '../core.js';
 const now='2026-09-13';
 for(const [input,seconds] of [['30公尺 7.42秒',7.42],['30m 7.42s',7.42],['今天30公尺跑7秒42',7.42],['30米 7.42秒',7.42],['30 M 8秒5',8.5],['30公尺 8秒05',8.05],['30公尺 7秒420',7.42],['小孩今天30米跑7秒42',7.42],['30公尺跑了7.42秒',7.42],['３０ｍ ７．４２ｓ',7.42]])test(input,()=>{const r=parseLine(input,now);assert.equal(r.distance,30);assert.equal(r.seconds,seconds);assert.equal(r.date,now);});
 for(const input of ['9/13 30米 7秒42','2026/9/13 30m 7.42秒','9-13 30m 7.42s','2026-09-13 30m 7.42s'])test(input,()=>assert.equal(parseLine(input,now).date,now));
@@ -114,6 +114,29 @@ test('非 stub 的 child_01 被占用時，帳號紀錄改掛到自己的小孩'
  assert.equal(after.visible[0].id,'rec-1');
  assert.equal(after.child.id,'child_01__user-a');
  assert.equal(after.child.ownerUid,'user-a');
+});
+
+test('不同來源的小孩衝突時各自修復，不合併紀錄且可重複執行',()=>{
+ const children=[
+  {id:'foreign-a',name:'甲',birthday:null,ownerUid:'other'},
+  {id:'foreign-b',name:'乙',birthday:null,ownerUid:'other'},
+  {id:'mine',name:'原有',birthday:null,ownerUid:'user-a'}
+ ];
+ const records=[
+  {...run(8,'2026-09-12','r1'),ownerUid:'user-a',childId:'foreign-a'},
+  {...run(9,'2026-09-13','r2'),ownerUid:'user-a',childId:'foreign-b'}
+ ];
+ const repaired=repairChildOwnership({children,records,uid:'user-a'});
+ assert.notEqual(repaired.records[0].childId,repaired.records[1].childId);
+ assert.deepEqual(repaired.records.map(record=>repaired.children.find(child=>child.id===record.childId)?.name),['甲','乙']);
+ const again=repairChildOwnership({children:repaired.children,records:repaired.records,uid:'user-a'});
+ assert.equal(again.changes.length,0);
+ assert.deepEqual(again.records,repaired.records);
+});
+
+test('CSV 檔名片段會保留姓名並移除不合法字元',()=>{
+ assert.equal(safeFilenamePart(' 小安/測試:*? '),'小安-測試---');
+ assert.equal(safeFilenamePart('...'),'child');
 });
 
 

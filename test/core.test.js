@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {parseLine,parseText,validDate,validate,speed,summary,improvement,warnings,csv,validateBackup,stableStringify,backupContent,contentHash,splitUtf8Chunks,retryDelay,classifyBackupError,LOCAL_OWNER,duplicateGroups,dailyStatistics,chartSeries,remapBackupChildIds,repairChildOwnership,visibleAfterRepair,chartCaption,clockCooldownRemaining,BACKUP_CLOCK_INTERVAL_MS,defaultChildId} from '../core.js';
+import {parseLine,parseText,validDate,validate,speed,summary,improvement,warnings,csv,validateBackup,stableStringify,backupContent,contentHash,splitUtf8Chunks,retryDelay,classifyBackupError,LOCAL_OWNER,duplicateGroups,dailyStatistics,chartSeries,remapBackupChildIds,repairChildOwnership,visibleAfterRepair,chartCaption,clockCooldownRemaining,BACKUP_CLOCK_INTERVAL_MS,defaultChildId,pickActiveChild} from '../core.js';
 const now='2026-09-13';
 for(const [input,seconds] of [['30公尺 7.42秒',7.42],['30m 7.42s',7.42],['今天30公尺跑7秒42',7.42],['30米 7.42秒',7.42],['30 M 8秒5',8.5],['30公尺 8秒05',8.05],['30公尺 7秒420',7.42],['小孩今天30米跑7秒42',7.42],['30公尺跑了7.42秒',7.42],['３０ｍ ７．４２ｓ',7.42]])test(input,()=>{const r=parseLine(input,now);assert.equal(r.distance,30);assert.equal(r.seconds,seconds);assert.equal(r.date,now);});
 for(const input of ['9/13 30米 7秒42','2026/9/13 30m 7.42秒','9-13 30m 7.42s','2026-09-13 30m 7.42s'])test(input,()=>assert.equal(parseLine(input,now).date,now));
@@ -37,7 +37,7 @@ test('穩定序列化與內容雜湊忽略鍵序',async()=>{
  const b={nested:{a:2,b:1},schemaVersion:1,settings:{theme:'x',reverse:true}};
  assert.equal(stableStringify(a),stableStringify(b));
  const rec={id:'r1',childId:'child_01',date:now,distance:30,seconds:7.42,note:'',startType:'',surface:'',timingMethod:'',createdAt:now+'T12:00:00Z',updatedAt:now+'T12:00:00Z',ownerUid:'user-a',updatedNetwork:'nope'};
- const payload=backupContent({children:[{id:'child_01',name:'小孩',birthday:null,ownerUid:'user-a'}],records:[rec],settings:[{id:'lastBackup',value:'t'},{id:'reverse:user-a',value:false}]},'user-a');
+ const payload=backupContent({children:[{id:'child_01',name:'小孩',birthday:null,ownerUid:'user-a'}],records:[rec],settings:[{id:'lastBackup',value:'t'},{id:'reverse:user-a',value:false},{id:'active-child:user-a',value:'child_01'}]},'user-a');
  assert.equal(payload.records[0].ownerUid,undefined);
  assert.deepEqual(payload.settings,{reverse:false});
  const hash=await contentHash(payload);
@@ -74,6 +74,14 @@ test('還原 child_01 會改寫成帳號專用 ID',()=>{
  assert.equal(remapped.children[0].id,'child_01__user-a');
  assert.equal(remapped.records[0].childId,'child_01__user-a');
  assert.equal(defaultChildId('user-a'),'child_01__user-a');
+});
+test('目前小孩可按本機選擇切換，無效選擇會回到預設小孩',()=>{
+ const children=[
+  {id:'child_01',name:'小安',birthday:null,ownerUid:LOCAL_OWNER},
+  {id:'child_01__2',name:'小樂',birthday:null,ownerUid:LOCAL_OWNER}
+ ];
+ assert.equal(pickActiveChild(children,LOCAL_OWNER,'child_01__2').name,'小樂');
+ assert.equal(pickActiveChild(children,LOCAL_OWNER,'missing').name,'小安');
 });
 test('還原後模擬重新整理：紀錄仍指向可見小孩',()=>{
  const children=[{id:'child_01',name:'小明',birthday:null,ownerUid:'user-a'}];

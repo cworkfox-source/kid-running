@@ -1,6 +1,6 @@
 # 驗收表 · Google 帳號綁定 + Firestore 版本備份
 
-更新日期：2026-09-13。環境：Cloud Agent、Node 22、OpenJDK 21。
+更新日期：2026-09-14。環境：Cloud Agent、Node 24、OpenJDK 21。
 
 ## Firebase 盤點
 
@@ -121,5 +121,12 @@ EMULATOR_BACKUP_OK {"backupId":"emu-backup-1","status":"complete","recordCount":
 - U02 iPhone Safari 真機：確認 popup-first 登入（GitHub Pages 跨網域 redirect 曾失敗）。
 - 真機請**先不要清除網站資料、也不要刪舊備份**。更新後重新整理即可；若仍看不到紀錄，到設定頁從雲端版本還原。
 - 此環境未跑 `npm run test:emulator`（無 Firestore Emulator）。S01 以 Emulator 為準。
+
+## 2026-09-14：啟動與多小孩驗收
+
+- 啟動先讀取 IndexedDB 並繪製可見首頁，再於背景初始化 Firebase；尚在解析帳號時，資料寫入與小孩切換會提示稍候，避免誤寫到訪客資料。
+- Firebase App、Auth、Firestore 三個 CDN 模組並行載入。已有 Service Worker 快取時，網路等待 1.8 秒後回退快取；首次開啟仍使用網路內容。
+- 本機瀏覽器驗收：新增「小安」→ 新增 30m／7.42 秒 → 切換預設「小孩」後紀錄為 0 → 切回「小安」後紀錄為 1 → 重新整理後仍選取「小安」且紀錄為 1。
+- 目前選取的小孩以帳號區隔的本機設定保存；JSON 與雲端快照只保存小孩與成績資料，不保存裝置上的選取狀態。
 
 **不要**把 service account 私鑰放進倉庫或前端。Web config 不是密鑰；真保護靠 Auth + Rules。

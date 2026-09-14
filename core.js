@@ -82,8 +82,9 @@ export function uniqueRecordId(id,uid,occupied=new Set()){
  while(occupied.has(`${base}__${n}`))n+=1;
  return `${base}__${n}`;
 }
-export function pickActiveChild(children,uid){
+export function pickActiveChild(children,uid,preferredId=null){
  const scoped=(children||[]).filter(c=>sameOwner(c,uid));
+ if(preferredId&&scoped.some(c=>c.id===preferredId))return scoped.find(c=>c.id===preferredId);
  return scoped.find(c=>c.id==='child_01'||c.id===defaultChildId(uid))||scoped[0]||null;
 }
 export function visibleRecordsForChild(records,child){

@@ -1,4 +1,4 @@
-import {today,validate,parseText,summary,speed,improvement,chronological,warnings,csv,validateBackup,LOCAL_OWNER,sameOwner,jsonExportPayload,duplicateGroups,dailyStatistics,chartSeries,repairChildOwnership,pickActiveChild,remapBackupChildIds,chartCaption} from './core.js';
+import {today,validate,parseText,summary,speed,improvement,chronological,warnings,csv,validateBackup,LOCAL_OWNER,sameOwner,jsonExportPayload,duplicateGroups,dailyStatistics,chartSeries,repairChildOwnership,pickActiveChild,remapBackupChildIds,chartCaption,uniqueChildId} from './core.js';
 import {openDB,all,write,ensureAppMeta,getAccount,putAccount,acquireLock,heartbeatLock,releaseLock,saveRestoreSnapshot} from './db.js';
 import {createAuthService,persistenceUnavailableMessage,shouldCompleteBackupEnable,writeEnableIntent,readEnableIntent,clearEnableIntent} from './auth.js';
 import {loadFirebaseModules,resolveFirebaseConfig,initFirebase,loadLocalFirebaseConfig} from './firebase.js';
@@ -16,7 +16,8 @@ let versionsQuery={status:'idle',versions:[],error:null},versionsUid=null,versio
 const ownerId=()=>authUser?.uid||LOCAL_OWNER;
 const scopedChildren=()=>children.filter(c=>sameOwner(c,ownerId()));
 const scopedRecords=()=>records.filter(r=>sameOwner(r,ownerId()));
-const active=()=>pickActiveChild(children,ownerId());
+const activeChildSettingId=()=>`active-child:${ownerId()}`;
+const active=()=>pickActiveChild(children,ownerId(),settings.find(s=>s.id===activeChildSettingId())?.value);
 const own=()=>active()?scopedRecords().filter(r=>r.childId===active().id):[];
 const reverseOn=()=>{const exact=settings.find(s=>s.id===`reverse:${ownerId()}`);if(exact)return exact.value!==false;if(ownerId()===LOCAL_OWNER)return settings.find(s=>s.id==='reverse')?.value!==false;return true;};
 const stat=()=>active()?summary(scopedRecords(),Number(distance),active().id):null;
@@ -53,7 +54,7 @@ function enableBanner(){
  if(appMeta?.enablePromptDismissed)return '';
  return `<section class="card backup-banner"><div class="section-head"><h2>雲端版本備份</h2><span class="pill">可稍後</span></div><p>登入一次，之後自動備份。本機仍會先存好，不會擋住你記錄成績。</p><p class="quiet">清除網站資料、無痕、換機／換瀏覽器，或撤銷 Google 授權後需要再登入。</p><div class="banner-actions"><button class="primary" id="enable-backup" type="button">使用 Google 帳號啟用備份</button><button class="secondary" id="dismiss-backup" type="button">稍後設定</button></div></section>`;
 }
-function render(){const titles={home:['每一步，都算數。','記下今天的努力，看見明天的進步。'],records:['努力，有跡可循。','每一筆紀錄，都是成長的一小步。'],analysis:['看見自己的進步。','和上一次的自己比，就很好。'],settings:['準備好，再出發。','你的紀錄，由你保管。']};const name=active()?.name||'小孩';$('#app').innerHTML=`<div class="shell"><header><a class="brand" href="#home"><span class="brandmark">↗</span><span>小步快跑<small>LITTLE STRIDES</small></span></a><span class="profile"><span class="avatar">${esc(name.slice(0,1))}</span>${esc(name)}</span></header><main><div class="page-heading"><p class="eyebrow">${{home:'READY, SET, GROW',records:'RUNNING JOURNAL',analysis:'YOUR PROGRESS',settings:'MAKE IT YOURS'}[page]}</p><h1>${titles[page][0]}</h1><p>${titles[page][1]}</p></div>${page==='home'?home():page==='records'?recordPage():page==='analysis'?analysis():settingPage()}</main><footer>小小的步伐，也有大大的進步。</footer></div><nav aria-label="主要導覽">${Object.entries({home:'首頁',records:'紀錄',analysis:'分析',settings:'設定'}).map(([key,label])=>`<button data-page="${key}" class="nav-item ${page===key?'active':''}" ${page===key?'aria-current="page"':''}><span aria-hidden="true">${icons[key]}</span>${label}</button>`).join('')}</nav>`;bind();}
+function render(){const titles={home:['每一步，都算數。','記下今天的努力，看見明天的進步。'],records:['努力，有跡可循。','每一筆紀錄，都是成長的一小步。'],analysis:['看見自己的進步。','和上一次的自己比，就很好。'],settings:['準備好，再出發。','你的紀錄，由你保管。']};const name=active()?.name||'小孩';$('#app').innerHTML=`<div class="shell"><header><a class="brand" href="#home"><span class="brandmark">↗</span><span>小步快跑<small>LITTLE STRIDES</small></span></a><button class="profile" id="child-picker" type="button" aria-label="切換小跑者"><span class="avatar">${esc(name.slice(0,1))}</span>${esc(name)}</button></header><main><div class="page-heading"><p class="eyebrow">${{home:'READY, SET, GROW',records:'RUNNING JOURNAL',analysis:'YOUR PROGRESS',settings:'MAKE IT YOURS'}[page]}</p><h1>${titles[page][0]}</h1><p>${titles[page][1]}</p></div>${page==='home'?home():page==='records'?recordPage():page==='analysis'?analysis():settingPage()}</main><footer>小小的步伐，也有大大的進步。</footer></div><nav aria-label="主要導覽">${Object.entries({home:'首頁',records:'紀錄',analysis:'分析',settings:'設定'}).map(([key,label])=>`<button data-page="${key}" class="nav-item ${page===key?'active':''}" ${page===key?'aria-current="page"':''}><span aria-hidden="true">${icons[key]}</span>${label}</button>`).join('')}</nav>`;bind();}
 function home(){const s=stat();return `<div class="home-grid"><div>${enableBanner()}<section class="card input-card"><div class="section-head"><h2>${editing?'編輯紀錄':'記錄今天的成績'}</h2><span class="pill">${editing?'修改中':'QUICK ADD'}</span></div><form id="run-form"><label class="date-row">測試日期<input aria-label="測試日期" id="date" type="date" required value="${esc(draft.date)}"></label><div class="metric-inputs"><label>距離 <span>公尺</span><input id="distance" type="number" inputmode="decimal" min="0.01" step="any" required value="${esc(draft.distance)}"></label><span class="divider">/</span><label>時間 <span>秒</span><input id="seconds" type="number" inputmode="decimal" min="0.001" step="any" placeholder="7.42" required value="${esc(draft.seconds)}"></label></div><div class="chips" aria-label="距離快捷鍵">${[10,20,30,40,50,60,100].map(d=>`<button type="button" data-distance="${d}" class="chip ${Number(draft.distance)===d?'selected':''}">${d}<small>m</small></button>`).join('')}<button type="button" id="custom" class="chip">自訂</button></div><details ${draft.note||draft.startType||draft.surface||draft.timingMethod?'open':''}><summary>＋ 備註與測試條件 <span>選填</span></summary><label>備註<textarea id="note" placeholder="場地、鞋子、天氣，或今天的小發現…">${esc(draft.note)}</textarea></label><div class="conditions"><label>起跑<select id="startType">${options([['','未指定'],['standing','靜止起跑'],['flying','助跑'],['free','自由跑']],draft.startType)}</select></label><label>場地<select id="surface">${options([['','未指定'],['indoor','室內'],['track','操場'],['asphalt','柏油'],['grass','草地']],draft.surface)}</select></label><label>計時<select id="timingMethod">${options([['','未指定'],['manual','手動'],['video','影片'],['electronic','電子計時']],draft.timingMethod)}</select></label></div></details><button class="primary add" type="submit">${editing?'儲存修改':'＋ 新增紀錄'}<span>↗</span></button>${editing?'<button class="secondary full" type="button" id="cancel-edit">取消編輯</button>':''}<p class="quiet centered">只需輸入秒數，就能記下這一步。</p></form></section><section class="card paste-card"><div class="section-head"><h2><span class="mini-icon">≡</span> 貼上文字，輕鬆記錄</h2><span class="muted">支援多筆</span></div><p class="muted">手邊已經有紀錄？整段貼上就好。</p><textarea id="paste" rows="3" aria-label="貼上跑步紀錄" placeholder="30公尺 7秒42&#10;9/13 30m 7.42秒"></textarea><button class="secondary full" id="parse">自動辨識 <span>→</span></button><div id="preview">${previewHTML()}</div></section></div><aside><section class="card progress-card"><div class="section-head"><h2>最近表現</h2><span class="live-dot">●</span></div>${distanceSelect()}${s?summaryHTML(s):empty('新的起跑線','新增第一筆成績，這裡就會開始記錄進步。')}<button class="text-button" data-page="analysis">查看完整分析 <span>↗</span></button></section><section class="encourage"><div class="track-art" aria-hidden="true"><i></i><i></i><i></i><b>↗</b></div><p>不必跑得比別人快。<br><strong>每次，都更靠近自己。</strong></p></section>${restoreOfferHTML()}${backupLine()}<p class="storage-note">◉ 日常資料存在這台裝置，雲端只做版本備份<br><button class="text-button" data-page="settings">備份與帳號設定 →</button></p></aside></div>`;}
 function summaryHTML(s){const v=s.total;return `<p class="muted">最近一次 · ${short(s.latest.date)}</p><div class="hero-number">${f(s.latest.seconds)}<span>秒</span></div><div class="speed-line">${f(speed(s.latest).ms)} m/s <span>· ${f(speed(s.latest).kmh)} km/h</span></div>${s.latest.seconds===s.best.seconds?'<span class="pb">🏆 目前最佳成績</span>':''}<div class="stat-pair"><div><span>個人最佳</span><strong>${f(s.best.seconds)}<small> 秒</small></strong></div><div><span>第一次</span><strong>${f(s.first.seconds)}<small> 秒</small></strong></div></div>${s.list.length>1?`<div class="improvement ${v.seconds<0?'slower':''}"><span>${v.seconds>=0?'↗':'↘'} 比第一次${v.seconds>=0?'進步':'慢了'}</span><strong>${f(Math.abs(v.seconds))} 秒 <small>（${Math.abs(v.percent).toFixed(1)}%）</small></strong></div><p class="recent-label">近 ${Math.min(3,s.list.length)} 次 <span>${s.list.slice(-3).map(r=>f(r.seconds)).join(' → ')}</span></p><p class="quiet">${s.list.length>=3&&s.list.slice(-3).every((r,i,a)=>i===0||r.seconds<a[i-1].seconds)?'持續進步 ↑':s.previous?`比前一次${delta(s.previous.seconds,s.latest.seconds)}`:''}</p>`:'<p class="quiet">第一筆紀錄，新的起點！</p>'}`;}
 function empty(title,text){return `<div class="empty"><span>↗</span><h3>${title}</h3><p>${text}</p></div>`;}
@@ -102,7 +103,8 @@ function settingPage(){
  const persistenceNote=authInfo.persistence?.ok===false?`<div class="notice warn">${esc(persistenceUnavailableMessage())}</div>`:'';
  const authErrorNote=authInfo.loadError&&authInfo.available?`<div class="notice warn">${esc(authInfo.loadError.message||'Google 登入未完成')}</div>`:'';
  const accountLine=authUser?`${esc(authUser.displayName||authUser.email||authUser.uid)}`:'尚未登入';
- return `${persistenceNote}${authErrorNote}<section class="card"><h2>小跑者</h2><form id="child-form"><label>顯示名稱<input id="child-name" value="${esc(active()?.name||'')}" maxlength="30" required></label><button class="secondary" type="submit">儲存名稱</button></form><p class="quiet">第一版使用一位小孩，資料已保留 childId 供未來擴充。</p></section>
+ const myChildren=scopedChildren();
+ return `${persistenceNote}${authErrorNote}<section class="card"><h2>小跑者</h2><label>目前小跑者<select id="active-child">${myChildren.map(child=>`<option value="${esc(child.id)}" ${child.id===active()?.id?'selected':''}>${esc(child.name)}</option>`).join('')}</select></label><form id="child-form"><label>顯示名稱<input id="child-name" value="${esc(active()?.name||'')}" maxlength="30" required></label><button class="secondary" type="submit">儲存名稱</button></form><form id="add-child-form"><label>新增小跑者<input id="new-child-name" maxlength="30" required placeholder="例如：小安"></label><button class="secondary" type="submit">＋ 新增小孩</button></form><p class="quiet">每位小孩的成績、個人最佳與分析分開顯示；可隨時在這裡切換。</p></section>
 <section class="card" id="cloud-backup"><h2>Google 帳號與雲端版本</h2>${backupLine()}<p class="muted">帳號：${accountLine}</p><p class="quiet">以 Firebase 使用者 ID 區隔資料，不用名字或 email 當所有權。換機請登入同一 Google 帳號後選擇版本還原；這是選版取代，不是合併。</p>
 <div class="settings-row"><div><strong>使用 Google 帳號啟用備份</strong><p>登入一次，之後自動備份（無痕、清資料、換瀏覽器除外）</p></div><button class="secondary" id="enable-backup" ${authUser&&accountState?.backupEnabled?'disabled':''}>${authUser&&accountState?.backupEnabled?'已啟用':'啟用備份'}</button></div>
 <div class="settings-row"><div><strong>立即備份</strong><p>略過等待，把目前本機快照上傳</p></div><button class="secondary" id="backup-now" ${authUser&&accountState?.backupEnabled?'':'disabled'}>立即備份</button></div>
@@ -135,7 +137,7 @@ async function ensureChild(){
 }
 async function safe(fn){if(busy)return;busy=true;try{await fn();}catch(e){toast(`未完成：${e.message}。資料未成功儲存時請勿關閉頁面。`);}finally{busy=false;}}
 function makeRecord(r,index=0){const time=new Date(Date.now()+index).toISOString();return {...r,id:crypto.randomUUID(),childId:active().id,ownerUid:ownerId(),createdAt:time,updatedAt:time};}
-async function writeLocal(changes){await write(changes.map(c=>c.value&&(c.store==='records'||c.store==='children')?{...c,value:{...c.value,ownerUid:ownerId()}}:c),{bumpRevision:true,ownerUid:ownerId()});if(!replacingData&&backupService&&authUser&&accountState?.backupEnabled)backupService.noteLocalChange(ownerId());}
+async function writeLocal(changes){if(authInfo.resolving)throw Error('帳號狀態讀取中，請稍候再儲存');await write(changes.map(c=>c.value&&(c.store==='records'||c.store==='children')?{...c,value:{...c.value,ownerUid:ownerId()}}:c),{bumpRevision:true,ownerUid:ownerId()});if(!replacingData&&backupService&&authUser&&accountState?.backupEnabled)backupService.noteLocalChange(ownerId());}
 async function replaceLocalData(task){
  const uid=ownerId();
  const shouldResume=Boolean(authUser&&backupService);
@@ -156,6 +158,19 @@ async function replaceLocalData(task){
 }
 async function saveRecords(incoming){const candidate=[...records];for(const r of incoming){validate(r);const notes=warnings(r,candidate);if(notes.length&&!confirm(notes.join('\n')+'\n\n確認保留原數值並繼續？'))return false;candidate.push(r);}await writeLocal(incoming.map(value=>({store:'records',value})));await refresh();return true;}
 async function setSetting(id,value){if(id==='reverse'){await writeLocal([{store:'settings',value:{id:`reverse:${ownerId()}`,value,ownerUid:ownerId()}}]);settings=await all('settings');return;}await write([{store:'settings',value:{id,value}}]);settings=await all('settings');}
+function resetChildDraft(){editing=null;preview=[];pasteDraft='';duplicateScanOpen=false;draft={date:today(),distance,seconds:'',note:'',startType:'',surface:'',timingMethod:''};}
+function hasUnsavedChildWork(){return Boolean(editing||preview.length||pasteDraft||draft.seconds||draft.note||draft.startType||draft.surface||draft.timingMethod);}
+async function switchActiveChild(id){
+ if(authInfo.resolving)throw Error('帳號狀態讀取中，請稍候再切換');
+ if(id===active()?.id)return;
+ if(!scopedChildren().some(child=>child.id===id))throw Error('找不到要切換的小孩');
+ if(page==='home')capture();
+ if(hasUnsavedChildWork()&&!confirm('目前有尚未儲存的內容。切換後將不保留這些內容，仍要切換嗎？')){render();return;}
+ await write([{store:'settings',value:{id:activeChildSettingId(),value:id}}]);
+ settings=await all('settings');
+ resetChildDraft();
+ render();
+}
 function clearRestoreList(){versions=[];versionsQuery={status:authUser?'loading':'signed-out',versions:[],error:null};versionsUid=authUser?.uid||null;selectedRestore=null;}
 async function loadVersions(){
  const uid=authUser?.uid||null;
@@ -302,7 +317,7 @@ function bindBackupUi(){
  $('#cancel-restore-preview')?.addEventListener('click',()=>{selectedRestore=null;render();});
  document.querySelectorAll('[data-restore]').forEach(btn=>btn.onclick=()=>{selectedRestore=versions.find(v=>v.backupId===btn.dataset.restore&&v.deviceId===btn.dataset.device)||null;render();$('#restore-preview-card')?.scrollIntoView({block:'nearest'});});
 }
-function bind(){document.querySelectorAll('[data-page]').forEach(b=>b.onclick=()=>changePage(b.dataset.page));$('.brand').onclick=e=>{e.preventDefault();changePage('home');};
+function bind(){document.querySelectorAll('[data-page]').forEach(b=>b.onclick=()=>changePage(b.dataset.page));$('.brand').onclick=e=>{e.preventDefault();changePage('home');};$('#child-picker')?.addEventListener('click',()=>changePage('settings'));
  if($('#run-form')){$('#run-form').oninput=capture;$('#custom').onclick=()=>{$('#distance').focus();$('#distance').select();};document.querySelectorAll('[data-distance]').forEach(b=>b.onclick=()=>{capture();draft.distance=Number(b.dataset.distance);distance=draft.distance;render();$('#seconds').focus();});$('#cancel-edit')?.addEventListener('click',()=>{editing=null;draft={...draft,date:today(),seconds:'',note:'',startType:'',surface:'',timingMethod:''};render();});$('#run-form').onsubmit=e=>{e.preventDefault();safe(async()=>{capture();const r=validate({...draft,distance:Number(draft.distance),seconds:Number(draft.seconds)});const previousBest=summary(records,r.distance,active().id)?.best;let message;
  if(editing){const old=records.find(x=>x.id===editing);if(sameRecordInput(old,r)){editing=null;render();toast('內容沒有變更，未建立新備份');return;}const updated={...old,...r,updatedAt:new Date().toISOString(),ownerUid:ownerId()};const notes=warnings(updated,records);if(notes.length&&!confirm(notes.join('\n')+'\n確認儲存修改？'))return;await writeLocal([{store:'records',value:updated}]);await refresh();message='紀錄已更新';}
  else{if(!await saveRecords([makeRecord(r)]))return;message=previousBest&&r.seconds<previousBest.seconds?`🏆 新個人最佳！${r.distance} 公尺 ${f(r.seconds)} 秒，比原紀錄 ${f(previousBest.seconds)} 秒快 ${f(previousBest.seconds-r.seconds)} 秒`:`已新增 ${r.distance} 公尺 · ${f(r.seconds)} 秒${!previousBest?'，第一筆 PB！':''}`;}
@@ -320,7 +335,9 @@ function bind(){document.querySelectorAll('[data-page]').forEach(b=>b.onclick=()
  $('#delete-duplicates')?.addEventListener('click',()=>safe(async()=>{const ids=selectedDuplicateIds();if(!ids.length)return;const currentIds=new Set(scopedRecords().map(record=>record.id));if(ids.some(id=>!currentIds.has(id))){duplicateScanOpen=false;render();toast('資料已變動，請重新掃描。');return;}if(!confirm(`刪除所選 ${ids.length} 筆紀錄？\n這會更新統計與雲端備份。`))return;await writeLocal(ids.map(id=>({store:'records',delete:id})));await refresh();duplicateScanOpen=true;render();toast(`已刪除 ${ids.length} 筆重複紀錄。`);}));
  $('#reverse')?.addEventListener('change',e=>safe(async()=>{await setSetting('reverse',e.target.checked);render();}));
  document.querySelectorAll('[data-edit],[data-copy]').forEach(b=>b.onclick=()=>{const r=records.find(x=>x.id===(b.dataset.edit||b.dataset.copy));editing=b.dataset.edit?r.id:null;draft={...r,date:b.dataset.copy?today():r.date};page='home';render();window.scrollTo(0,0);$('#seconds').focus();if(b.dataset.copy)toast('已複製到輸入欄，確認後再新增');});document.querySelectorAll('[data-delete]').forEach(b=>b.onclick=()=>safe(async()=>{const r=records.find(x=>x.id===b.dataset.delete);if(!confirm(`刪除 ${r.date} · ${r.distance} 公尺 ${r.seconds} 秒？\n刪除後本機無法復原，除非已有 JSON 或雲端版本。`))return;await writeLocal([{store:'records',delete:r.id}]);await refresh();render();toast('已刪除這筆紀錄；既有雲端成功版本仍會保留。');}));
+ $('#active-child')?.addEventListener('change',e=>safe(()=>switchActiveChild(e.target.value)));
  $('#child-form')?.addEventListener('submit',e=>{e.preventDefault();safe(async()=>{const name=$('#child-name').value.trim();if(!name)throw Error('名稱不可空白');await writeLocal([{store:'children',value:{...active(),name,ownerUid:ownerId()}}]);await refresh();render();toast('名稱已更新');});});
+ $('#add-child-form')?.addEventListener('submit',e=>{e.preventDefault();safe(async()=>{const name=$('#new-child-name').value.trim();if(!name)throw Error('名稱不可空白');const id=uniqueChildId(ownerId(),new Set(children.map(child=>child.id)));await writeLocal([{store:'children',value:{id,name,birthday:null,ownerUid:ownerId()}},{store:'settings',value:{id:activeChildSettingId(),value:id}}]);await refresh();resetChildDraft();render();toast(`已新增小跑者：${name}`);});});
  $('#export-json')?.addEventListener('click',()=>safe(async()=>{await exportCurrentFile(`run-data-${today()}.json`,JSON.stringify(jsonExportPayload({children,records,settings},ownerId()),null,2),'application/json',{remember:true});}));
  $('#export-csv')?.addEventListener('click',()=>safe(async()=>{await exportCurrentFile(`run-data-${today()}.csv`,csv(own()),'text/csv;charset=utf-8');}));
  $('#copy-export-content')?.addEventListener('click',()=>safe(async()=>{const text=exportFallback?.content||$('#export-fallback-text')?.value||'';if(!text)return;if(navigator.clipboard?.writeText)await navigator.clipboard.writeText(text);else{const box=$('#export-fallback-text');if(box){box.focus();box.select();document.execCommand('copy');}}toast('已複製內容，請自行貼上存檔');}));
@@ -381,6 +398,12 @@ try{
   }
  });
  await refresh();
+ await ensureChild();
+ distance=settings.find(s=>s.id==='distance')?.value||30;draft.distance=distance;
+ const initialRoute=location.hash.slice(1);if(['home','records','analysis','settings'].includes(initialRoute))page=initialRoute;
+ render();
+ attachNetworkHooks();
+ if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'}).then(reg=>reg.update().catch(()=>{})).catch(()=>toast('離線快取未啟用；請保持網路連線。'));
  const bootAuth=await authService.start();
  authInfo=bootAuth;authUser=bootAuth.user;
  if(bootAuth.loadError)toast(bootAuth.available?(bootAuth.loadError.message||'Google 登入未完成'):'雲端元件暫時無法使用，本機仍可記錄。');
@@ -389,7 +412,6 @@ try{
   const mods=authService.getModules();
   cloud=createFirestoreCloud({firestore:authService.getFirebase().firestore,fs:mods.firestore});
  }
- distance=settings.find(s=>s.id==='distance')?.value||30;draft.distance=distance;
  if(authUser){
   await refresh();
   const acc=await getAccount(authUser.uid);
@@ -401,11 +423,8 @@ try{
   else if(acc.backupEnabled)void backupService.checkQueue(authUser.uid).catch(error=>toast(`資料已存本機，雲端備份稍後重試：${error.message||error}`));
  }
  await refresh();await ensureChild();
- const route=location.hash.slice(1);if(['home','records','analysis','settings'].includes(route))page=route;
  if(page==='settings')await loadVersions();
  render();
- attachNetworkHooks();
- if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'}).then(reg=>reg.update().catch(()=>{})).catch(()=>toast('離線快取未啟用；請保持網路連線。'));
 }catch(e){
  const title=localStorageReady?'網站啟動未完成':'無法開啟本機儲存空間';
  const message=localStorageReady?'本機資料沒有因這個錯誤被清除。請重新整理；若持續發生，請保留錯誤訊息並聯絡管理者。':'請允許瀏覽器使用網站儲存空間，或改用一般瀏覽模式後重新整理。尚未寫入任何新紀錄。';

@@ -36,9 +36,11 @@ export function resolveFirebaseConfig({search,hostname,localConfig,envConfig}={}
 }
 
 export async function loadFirebaseModules(cdn=FIREBASE_CDN,loader=url=>import(url)){
- const app=await loader(`${cdn}/firebase-app.js`);
- const auth=await loader(`${cdn}/firebase-auth.js`);
- const firestore=await loader(`${cdn}/firebase-firestore.js`);
+ const [app,auth,firestore]=await Promise.all([
+  loader(`${cdn}/firebase-app.js`),
+  loader(`${cdn}/firebase-auth.js`),
+  loader(`${cdn}/firebase-firestore.js`)
+ ]);
  return {app,auth,firestore};
 }
 

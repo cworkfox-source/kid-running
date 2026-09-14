@@ -113,6 +113,9 @@ test('app.js 設定頁還原入口不依 backupEnabled 隱藏，備份成功會�
  assert.match(app,/clearRestoreList/);
  assert.match(app,/inconsistent/);
  assert.match(app,/id="clear-analysis-range"/);
+ assert.match(app,/id="apply-analysis-range"/);
+ assert.doesNotMatch(app,/平均時速 km\/h/);
+ assert.doesNotMatch(app,/\$\('#analysis-start'\)\?\.addEventListener\('change'/);
  assert.match(app,/repairChildOwnership/);
  assert.match(app,/authService\.start\(\)/);
  assert.doesNotMatch(app,/await refresh\(\);await ensureChild\(\);\s*const bootAuth=await authService\.start/);

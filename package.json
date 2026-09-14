@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test test/*.test.js",
+    "test": "node --test test/auth.test.js test/backup.test.js test/core.test.js test/export.test.js test/restore.test.js test/sw.test.js",
     "start": "node server.js",
     "emulators": "npx --yes firebase-tools@13.29.3 emulators:start --only auth,firestore",
     "test:emulator": "npx --yes firebase-tools@13.29.3 emulators:exec --project demo-kid-running --only firestore \"node --test --test-concurrency=1 test/emulator.test.js\""

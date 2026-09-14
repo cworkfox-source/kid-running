@@ -1,4 +1,4 @@
-const CACHE='kid-running-v15';
+const CACHE='kid-running-v16';
 const NETWORK_TIMEOUT_MS=1800;
 const ASSETS=['./','./index.html','./styles.css','./app.js','./core.js','./db.js','./auth.js','./backup.js','./restore.js','./export.js','./firebase.js','./firebase-config.js','./cloud.js'];
 

@@ -59,7 +59,9 @@ export async function openDB(){
 }
 
 function isClosedConnectionError(error){
- return error?.name==='InvalidStateError'||/connection is clos|database.*clos/i.test(String(error?.message||''));
+ // Chrome／Android：InvalidStateError "The database connection is closing"
+ // iOS Safari：UnknownError "Connection to Indexed Database server lost"
+ return error?.name==='InvalidStateError'||/connection is clos|database.*clos|indexed ?database server lost/i.test(String(error?.message||''));
 }
 
 // 建立交易；若既有連線已關閉或正在關閉，丟棄舊連線並重開一次再試

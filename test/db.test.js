@@ -68,3 +68,13 @@ test('IndexedDB 連線被瀏覽器關閉後，下次讀寫會自動重開而不�
  fake.opened[2].transaction=()=>{throw new TypeError('bad store');};
  await assert.rejects(db.all('records'),TypeError);
 });
+
+test('iOS Safari「Connection to Indexed Database server lost」也會重開連線',async()=>{
+ const db=await import('../db.js');
+ const fake=globalThis.indexedDB;
+ const before=fake.opened.length;
+ const conn=fake.opened.at(-1);
+ conn.transaction=()=>{const e=new Error('Connection to Indexed Database server lost. Refresh the page to try again');e.name='UnknownError';throw e;};
+ assert.deepEqual(await db.get('meta','app'),{id:'app',deviceId:'d1'});
+ assert.equal(fake.opened.length,before+1);
+});

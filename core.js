@@ -22,7 +22,30 @@ export const duplicate=(a,b)=>sameGroup(a,b)&&a.date===b.date&&a.seconds===b.sec
 export const speed=r=>({ms:r.distance/r.seconds,kmh:r.distance/r.seconds*3.6});
 export const improvement=(before,after)=>({seconds:before-after,percent:(before-after)/before*100});
 export function summary(records,distance,childId='child_01'){const list=chronological(records.filter(r=>r.distance===distance&&r.childId===childId));if(!list.length)return null;const first=list[0],latest=list.at(-1),previous=list.at(-2),best=list.reduce((a,b)=>a.seconds<=b.seconds?a:b);return {list,first,latest,previous,best,total:improvement(first.seconds,latest.seconds)};}
-export function warnings(record,records){const group=records.filter(r=>sameGroup(r,record)&&r.id!==record.id);const messages=[];if(group.some(r=>duplicate(r,record)))messages.push('這筆資料可能已經存在，仍然新增嗎？');if(group.length>=3){const values=group.map(r=>r.seconds).sort((a,b)=>a-b),median=values[Math.floor(values.length/2)];if(record.seconds>median*2||record.seconds<median/2)messages.push(`這筆 ${record.seconds} 秒明顯偏離平常約 ${median} 秒，請確認小數點與測試條件。`);}return messages;}
+export function warnings(record,records){const group=records.filter(r=>sameGroup(r,record)&&r.id!==record.id);const messages=[];if(group.some(r=>duplicate(r,record)))messages.push(DUPLICATE_WARNING);if(group.length>=3){const values=group.map(r=>r.seconds).sort((a,b)=>a-b),median=values[Math.floor(values.length/2)];if(record.seconds>median*2||record.seconds<median/2)messages.push(`這筆 ${record.seconds} 秒明顯偏離平常約 ${median} 秒，請確認小數點與測試條件。`);}return messages;}
+export const DUPLICATE_WARNING='這筆資料可能已經存在，仍然新增嗎？';
+// 貼上預覽的重複比對：每列回傳與既有紀錄（同小孩、日期、距離、秒數）或本次貼上較前面列相同的資訊；無重複回傳 null
+export function pasteDuplicateInfo(items,existing,childId){
+ const seen=[];
+ return items.map(item=>{
+  if(!item?.record)return null;
+  const r={...item.record,childId};
+  const matches=chronological(existing.filter(e=>duplicate(e,r)));
+  const earlierLines=seen.filter(s=>duplicate(s.record,r)).map(s=>s.line);
+  seen.push({record:r,line:item.line});
+  return matches.length||earlierLines.length?{existing:matches,earlierLines}:null;
+ });
+}
+// 依使用者勾選決定要匯入的列：沒有重複的一律匯入，有重複的只匯入勾選「仍要匯入」者
+export function pasteImportPlan(items,dupInfo){
+ const importItems=[],skipped=[];
+ items.forEach((item,i)=>{
+  if(!item?.record)return;
+  if(dupInfo[i]&&!item.keep)skipped.push(item);
+  else importItems.push(item);
+ });
+ return {importItems,skipped};
+}
 export function duplicateGroups(records,{childId}={}){
  const buckets=new Map();
  for(const r of records){if(childId&&r.childId!==childId)continue;const key=[r.childId,r.date,r.distance,r.seconds].join('\u0000');const list=buckets.get(key)||[];list.push(r);buckets.set(key,list);}

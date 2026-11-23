@@ -1,6 +1,7 @@
 import {LOCAL_OWNER} from './core.js';
 
-let database;
+let database=null;
+let opening=null;
 
 function request(req){
  return new Promise((resolve,reject)=>{
@@ -10,7 +11,9 @@ function request(req){
 }
 
 export async function openDB(){
- return new Promise((resolve,reject)=>{
+ if(database)return database;
+ if(opening)return opening;
+ opening=new Promise((resolve,reject)=>{
   const req=indexedDB.open('kid-running',2);
   req.onupgradeneeded=event=>{
    const db=req.result;
@@ -42,26 +45,51 @@ export async function openDB(){
    }
   };
   req.onsuccess=()=>{
-   database=req.result;
-   database.onversionchange=()=>database.close();
-   resolve(database);
+   const db=req.result;
+   // 瀏覽器可能在背景、切換到 Google 登入頁或其他分頁升級時關閉連線；關閉後清掉快取，下次操作自動重開
+   db.onversionchange=()=>{if(database===db)database=null;db.close();};
+   db.onclose=()=>{if(database===db)database=null;};
+   database=db;
+   resolve(db);
   };
   req.onerror=()=>reject(req.error);
   req.onblocked=()=>reject(Error('請關閉其他分頁後重試'));
- });
+ }).finally(()=>{opening=null;});
+ return opening;
 }
 
-export function all(store){
+function isClosedConnectionError(error){
+ // Chrome／Android：InvalidStateError "The database connection is closing"
+ // iOS Safari：UnknownError "Connection to Indexed Database server lost"
+ return error?.name==='InvalidStateError'||/connection is clos|database.*clos|indexed ?database server lost/i.test(String(error?.message||''));
+}
+
+// 建立交易；若既有連線已關閉或正在關閉，丟棄舊連線並重開一次再試
+async function transaction(stores,mode='readonly'){
+ for(let attempt=0;;attempt++){
+  const db=await openDB();
+  try{return db.transaction(stores,mode);}
+  catch(error){
+   if(attempt>0||!isClosedConnectionError(error))throw error;
+   if(database===db)database=null;
+   try{db.close();}catch{}
+  }
+ }
+}
+
+export async function all(store){
+ const tx=await transaction(store);
  return new Promise((resolve,reject)=>{
-  const req=database.transaction(store).objectStore(store).getAll();
+  const req=tx.objectStore(store).getAll();
   req.onsuccess=()=>resolve(req.result);
   req.onerror=()=>reject(req.error);
  });
 }
 
-export function get(store,id){
+export async function get(store,id){
+ const tx=await transaction(store);
  return new Promise((resolve,reject)=>{
-  const req=database.transaction(store).objectStore(store).get(id);
+  const req=tx.objectStore(store).get(id);
   req.onsuccess=()=>resolve(req.result);
   req.onerror=()=>reject(req.error);
  });
@@ -73,11 +101,11 @@ function applyChange(store,change){
  else store.put(change.value);
 }
 
-export function write(changes,options={}){
+export async function write(changes,options={}){
+ const stores=new Set(changes.map(c=>c.store));
+ if(options.bumpRevision||options.meta)stores.add('meta');
+ const tx=await transaction([...stores],'readwrite');
  return new Promise((resolve,reject)=>{
-  const stores=new Set(changes.map(c=>c.store));
-  if(options.bumpRevision||options.meta)stores.add('meta');
-  const tx=database.transaction([...stores],'readwrite');
   tx.oncomplete=resolve;
   tx.onerror=()=>reject(tx.error);
   tx.onabort=()=>reject(tx.error||Error('儲存取消'));
@@ -120,10 +148,10 @@ export async function putAccount(account){
  await write([{store:'meta',value:{...account,id:`account:${account.ownerUid}`}}]);
 }
 
-export function acquireLock(tabId,ttl=25000,now=Date.now()){
+export async function acquireLock(tabId,ttl=25000,now=Date.now()){
+ const tx=await transaction(['backupLocks'],'readwrite');
  return new Promise((resolve,reject)=>{
   let ok=false;
-  const tx=database.transaction(['backupLocks'],'readwrite');
   const store=tx.objectStore('backupLocks');
   const getReq=store.get('backup');
   getReq.onsuccess=()=>{
@@ -138,10 +166,10 @@ export function acquireLock(tabId,ttl=25000,now=Date.now()){
  });
 }
 
-export function heartbeatLock(tabId,ttl=25000,now=Date.now()){
+export async function heartbeatLock(tabId,ttl=25000,now=Date.now()){
+ const tx=await transaction(['backupLocks'],'readwrite');
  return new Promise((resolve,reject)=>{
   let ok=false;
-  const tx=database.transaction(['backupLocks'],'readwrite');
   const store=tx.objectStore('backupLocks');
   const getReq=store.get('backup');
   getReq.onsuccess=()=>{
@@ -155,9 +183,9 @@ export function heartbeatLock(tabId,ttl=25000,now=Date.now()){
  });
 }
 
-export function releaseLock(tabId){
+export async function releaseLock(tabId){
+ const tx=await transaction(['backupLocks'],'readwrite');
  return new Promise((resolve,reject)=>{
-  const tx=database.transaction(['backupLocks'],'readwrite');
   const store=tx.objectStore('backupLocks');
   const getReq=store.get('backup');
   getReq.onsuccess=()=>{

@@ -147,3 +147,28 @@ test('跨帳號還原遇到相同紀錄 ID 時會重新編號，不覆寫既有�
  assert.match(remapped.records[0].id,/same-id__user-a/);
  assert.equal(remapped.records[0].childId,defaultChildId('user-a'));
 });
+
+test('貼上重複比對：與既有紀錄或本次較前面的列相同才標記，且只比對同一位小孩',async()=>{
+ const {pasteDuplicateInfo,pasteImportPlan}=await import('../core.js');
+ const existing=[
+  {id:'a',childId:'c1',date:'2026-09-13',distance:30,seconds:7.42,createdAt:'2026-09-13T01:00:00Z'},
+  {id:'b',childId:'c2',date:'2026-09-13',distance:30,seconds:8,createdAt:'2026-09-13T01:00:00Z'}
+ ];
+ const items=[
+  {line:1,record:{date:'2026-09-13',distance:30,seconds:7.42}},
+  {line:2,record:{date:'2026-09-13',distance:30,seconds:8}},
+  {line:3,error:'無法辨識',source:'xx'},
+  {line:4,record:{date:'2026-09-13',distance:30,seconds:8}}
+ ];
+ const info=pasteDuplicateInfo(items,existing,'c1');
+ assert.deepEqual(info[0].existing.map(r=>r.id),['a']);
+ assert.equal(info[1],null,'其他小孩的相同成績不算重複');
+ assert.equal(info[2],null);
+ assert.deepEqual(info[3],{existing:[],earlierLines:[2]});
+
+ assert.deepEqual(pasteImportPlan(items,info).importItems.map(i=>i.line),[2],'重複列預設不匯入');
+ items[0].keep=true;
+ const plan=pasteImportPlan(items,info);
+ assert.deepEqual(plan.importItems.map(i=>i.line),[1,2]);
+ assert.deepEqual(plan.skipped.map(i=>i.line),[4]);
+});

@@ -4,7 +4,7 @@ export function validDate(s){if(!/^\d{4}-\d{2}-\d{2}$/.test(s))return false;cons
 export const SPORTS={run:{label:'跑步',icon:'🏃'},balance:{label:'滑步車',icon:'🚲'}};
 export const TERRAINS={flat:'平地',slope:'山坡'};
 export const RUN_PRESETS=[10,20,30,40,50,60,100];
-export const BALANCE_PRESETS={flat:[10,20,30],slope:[10,20,30]};
+export const BALANCE_PRESETS={flat:[10,20,30,40,50],slope:[10,20,30,40,50]};
 export const sportOf=r=>r?.sport==='balance'?'balance':'run';
 export const terrainOf=r=>sportOf(r)==='balance'?(r.terrain==='slope'?'slope':'flat'):'';
 export function normalizeEvent(e){if(typeof e==='number')return {sport:'run',terrain:'',distance:e};const sport=sportOf(e);return {sport,terrain:terrainOf(e),distance:Number(e?.distance)};}

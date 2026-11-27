@@ -34,3 +34,4 @@
 .event-tag{display:inline-block;font-size:11px;font-weight:650;letter-spacing:0;background:#eef4f9;color:#3f6a8a;border-radius:5px;padding:3px 6px;margin-right:6px;vertical-align:middle}
 .preview-row .preview-event{grid-column:1/-1}.preview-row select{width:100%;padding:5px;font-size:13px;margin-top:5px}
 .boot-help{max-width:520px;margin:48px auto}.boot-help h1{font-size:22px}
+.event-presets .preset-row{display:grid;grid-template-columns:minmax(48px,auto) repeat(5,minmax(0,1fr));gap:6px}.event-presets .preset-row .chip{padding:0 4px;min-width:0}.event-presets .chip.terrain{min-width:48px;padding:0 8px}

@@ -1,11 +1,11 @@
-const CACHE='kid-running-v18';
+const CACHE='kid-running-v19';
 const NETWORK_TIMEOUT_MS=1800;
 const ASSETS=['./','./index.html','./styles.css','./app.js','./core.js','./db.js','./auth.js','./backup.js','./restore.js','./export.js','./firebase.js','./firebase-config.js','./cloud.js'];
 
 self.addEventListener('install',event=>{
  event.waitUntil(
   caches.open(CACHE)
-   .then(cache=>cache.addAll(ASSETS))
+   .then(cache=>cache.addAll(ASSETS.map(url=>new Request(url,{cache:'reload'}))))
    .then(()=>self.skipWaiting())
  );
 });
@@ -50,7 +50,8 @@ async function cachedFallback(request){
 }
 
 function networkFirst(request){
- const network=fetch(request).then(response=>{
+ // no-cache：向伺服器確認版本（未變更時只回 304），避免 HTTP 快取把舊 core.js 配上新 app.js
+ const network=fetch(request,{cache:'no-cache'}).then(response=>{
   putInCache(request,response);
   return response;
  });

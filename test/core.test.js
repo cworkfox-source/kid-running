@@ -172,3 +172,32 @@ test('貼上重複比對：與既有紀錄或本次較前面的列相同才標�
  assert.deepEqual(plan.importItems.map(i=>i.line),[1,2]);
  assert.deepEqual(plan.skipped.map(i=>i.line),[4]);
 });
+
+import {sportOf,terrainOf,eventKey,eventLabel,portableRecord,duplicate} from '../core.js';
+test('滑步車：文字關鍵字與目前運動預設',()=>{
+ const a=parseLine('滑步車 山坡 20m 9秒8',now);assert.equal(a.sport,'balance');assert.equal(a.terrain,'slope');assert.equal(a.seconds,9.8);
+ const b=parseLine('平地10米 5.2秒',now);assert.equal(b.sport,'balance');assert.equal(b.terrain,'flat');
+ const c=parseLine('30m 7.42秒',now);assert.equal(c.sport,'run');assert.equal(c.terrain,'');
+ const d=parseLine('20m 9秒',now,{sport:'balance',terrain:'slope'});assert.equal(d.sport,'balance');assert.equal(d.terrain,'slope');
+ const e=parseLine('跑步 30m 7秒',now,{sport:'balance'});assert.equal(e.sport,'run');
+ const rows=parseText('9/1 平地 10m 5.1\n9/1 山坡 10m 6.3',now,{sport:'balance'});assert.deepEqual(rows.map(x=>eventKey(x.record)),['balance:flat:10','balance:slope:10']);
+});
+test('滑步車：分組、摘要、重複判斷不與跑步或其他地形混算',()=>{
+ const rows=[run(5,'2026-09-01','a',{distance:10}),run(6,'2026-09-01','b',{distance:10,sport:'balance',terrain:'flat'}),run(8,'2026-09-02','c',{distance:10,sport:'balance',terrain:'slope'}),run(6,'2026-09-01','d',{distance:10,sport:'balance',terrain:'slope'})];
+ assert.equal(summary(rows,10).list.length,1,'數字距離＝跑步，向下相容');
+ assert.equal(summary(rows,{sport:'balance',terrain:'slope',distance:10}).best.id,'d');
+ assert.equal(duplicate(rows[1],rows[3]),false);
+ assert.equal(duplicateGroups(rows,{childId:'child_01'}).length,0);
+ const day=dailyStatistics(rows,'2026-09-01',{childId:'child_01'});assert.deepEqual(day.byDistance.map(g=>g.label),['跑步 10 公尺','滑步車 平地 10 公尺','滑步車 山坡 10 公尺']);
+ assert.equal(dailyStatistics(rows,'2026-09-01',{childId:'child_01',sport:'balance'}).count,2);
+ assert.equal(chartSeries(rows,{childId:'child_01',event:{sport:'balance',terrain:'slope',distance:10}}).length,2);
+ assert.equal(eventLabel({sport:'balance',terrain:'slope',distance:20}),'山坡 20 公尺');
+ assert.equal(sportOf({}),'run');assert.equal(terrainOf({sport:'balance'}),'flat');
+});
+test('滑步車：驗證、備份欄位與 CSV',()=>{
+ assert.throws(()=>validate({...run(5),sport:'swim'}));assert.throws(()=>validate({...run(5),terrain:'hill'}));
+ assert.equal('sport' in portableRecord(run(5)),false,'跑步紀錄備份內容不變，雜湊不受影響');
+ assert.deepEqual([portableRecord(run(5,now,'x',{sport:'balance',terrain:'slope'})).sport,portableRecord(run(5,now,'x',{sport:'balance',terrain:'slope'})).terrain],['balance','slope']);
+ const data={version:1,children:[{id:'child_01',name:'小孩',birthday:null}],records:[run(5,now,'x',{sport:'balance',terrain:'flat'})]};assert.equal(validateBackup(data),data);
+ assert.ok(csv([run(5,now,'x',{sport:'balance',terrain:'slope'})]).includes('"滑步車","山坡"'));
+});

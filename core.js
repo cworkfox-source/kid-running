@@ -1,8 +1,25 @@
 export const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;};
 export function validDate(s){if(!/^\d{4}-\d{2}-\d{2}$/.test(s))return false;const d=new Date(s+'T12:00:00Z');return Number.isFinite(+d)&&d.toISOString().slice(0,10)===s;}
-export function validate(r){if(!validDate(r.date))throw Error('請輸入有效日期');if(typeof r.distance!=='number'||!Number.isFinite(r.distance)||r.distance<=0)throw Error('距離必須大於 0');if(typeof r.seconds!=='number'||!Number.isFinite(r.seconds)||r.seconds<=0)throw Error('秒數必須大於 0');if(typeof r.note!=='string')throw Error('備註格式不正確');return r;}
-export function parseLine(source,now=today()){
+// 運動項目：跑步（預設，舊資料沒有 sport 欄位）與滑步車（分平地／山坡）
+export const SPORTS={run:{label:'跑步',icon:'🏃'},balance:{label:'滑步車',icon:'🚲'}};
+export const TERRAINS={flat:'平地',slope:'山坡'};
+export const RUN_PRESETS=[10,20,30,40,50,60,100];
+export const BALANCE_PRESETS={flat:[10,20,30],slope:[10,20,30]};
+export const sportOf=r=>r?.sport==='balance'?'balance':'run';
+export const terrainOf=r=>sportOf(r)==='balance'?(r.terrain==='slope'?'slope':'flat'):'';
+export function normalizeEvent(e){if(typeof e==='number')return {sport:'run',terrain:'',distance:e};const sport=sportOf(e);return {sport,terrain:terrainOf(e),distance:Number(e?.distance)};}
+export const eventKey=r=>`${sportOf(r)}:${terrainOf(r)}:${r.distance}`;
+export const matchEvent=(r,e)=>{const n=normalizeEvent(e);return sportOf(r)===n.sport&&terrainOf(r)===n.terrain&&r.distance===n.distance;};
+// 短標籤（已在該運動的畫面內）：跑步「30 公尺」、滑步車「平地 10 公尺」；完整標籤加上運動名稱
+export function eventLabel(e,{full=false}={}){const n=normalizeEvent(e);if(n.sport==='run')return `${full?'跑步 ':''}${n.distance} 公尺`;return `${full?'滑步車 ':''}${TERRAINS[n.terrain]} ${n.distance} 公尺`;}
+export function validate(r){if(!validDate(r.date))throw Error('請輸入有效日期');if(typeof r.distance!=='number'||!Number.isFinite(r.distance)||r.distance<=0)throw Error('距離必須大於 0');if(typeof r.seconds!=='number'||!Number.isFinite(r.seconds)||r.seconds<=0)throw Error('秒數必須大於 0');if(typeof r.note!=='string')throw Error('備註格式不正確');if(!['',undefined,'run','balance'].includes(r.sport))throw Error('運動項目無效');if(!['',undefined,'flat','slope'].includes(r.terrain))throw Error('地形無效');return r;}
+export function parseLine(source,now=today(),defaults={}){
  let text=source.normalize('NFKC').trim();let date=now;
+ // 項目關鍵字：滑步車／平地／山坡 → 滑步車；明寫「跑步」→ 跑步；都沒有就用目前選擇的運動
+ const kwBalance=/滑步|平衡車|balance/i.test(text),kwSlope=/坡/.test(text),kwFlat=/平地|平路/.test(text),kwRun=/跑步/.test(text);
+ let sport=defaults.sport==='balance'?'balance':'run';
+ if(kwBalance||kwSlope||kwFlat)sport='balance';else if(kwRun)sport='run';
+ const terrain=sport==='balance'?(kwSlope?'slope':kwFlat?'flat':defaults.terrain==='slope'?'slope':'flat'):'';
  const dm=text.match(/(?<!\d)(?:(\d{4})[/-])?(\d{1,2})[/-](\d{1,2})(?!\d)/);
  if(dm){date=`${dm[1]||now.slice(0,4)}-${dm[2].padStart(2,'0')}-${dm[3].padStart(2,'0')}`;text=text.replace(dm[0],' ');}
  if(/[-−]\s*\d/.test(text))throw Error('不接受負數');
@@ -13,15 +30,15 @@ export function parseLine(source,now=today()){
  if(time){if(time[2]&&time[1].includes('.'))throw Error('秒數格式不明確');seconds=Number(time[1]+(time[2]?'.'+time[2]:''));text=text.replace(time[0],' ');}
  else{const nums=text.match(/\d+(?:\.\d+)?/g)||[];if(nums.length!==1)throw Error('找不到明確秒數');seconds=Number(nums[0]);text=text.replace(nums[0],' ');}
  if(/\d/.test(text))throw Error('一行含多組數字，請每行只放一筆成績');
- return validate({date,distance:Number(distance[1]),seconds,note:source.trim(),startType:'',surface:'',timingMethod:''});
+ return validate({date,distance:Number(distance[1]),seconds,note:source.trim(),startType:'',surface:'',timingMethod:'',sport,terrain});
 }
-export const parseText=(text,now=today())=>text.split(/\r?\n/).map((source,index)=>({source,line:index+1})).filter(x=>x.source.trim()).map(x=>{try{return {...x,record:parseLine(x.source,now)};}catch(e){return {...x,error:e.message};}});
+export const parseText=(text,now=today(),defaults={})=>text.split(/\r?\n/).map((source,index)=>({source,line:index+1})).filter(x=>x.source.trim()).map(x=>{try{return {...x,record:parseLine(x.source,now,defaults)};}catch(e){return {...x,error:e.message};}});
 export const chronological=records=>[...records].sort((a,b)=>a.date.localeCompare(b.date)||(a.createdAt||'').localeCompare(b.createdAt||'')||a.id.localeCompare(b.id));
-export const sameGroup=(a,b)=>a.childId===b.childId&&a.distance===b.distance;
+export const sameGroup=(a,b)=>a.childId===b.childId&&eventKey(a)===eventKey(b);
 export const duplicate=(a,b)=>sameGroup(a,b)&&a.date===b.date&&a.seconds===b.seconds;
 export const speed=r=>({ms:r.distance/r.seconds,kmh:r.distance/r.seconds*3.6});
 export const improvement=(before,after)=>({seconds:before-after,percent:(before-after)/before*100});
-export function summary(records,distance,childId='child_01'){const list=chronological(records.filter(r=>r.distance===distance&&r.childId===childId));if(!list.length)return null;const first=list[0],latest=list.at(-1),previous=list.at(-2),best=list.reduce((a,b)=>a.seconds<=b.seconds?a:b);return {list,first,latest,previous,best,total:improvement(first.seconds,latest.seconds)};}
+export function summary(records,event,childId='child_01'){const list=chronological(records.filter(r=>matchEvent(r,event)&&r.childId===childId));if(!list.length)return null;const first=list[0],latest=list.at(-1),previous=list.at(-2),best=list.reduce((a,b)=>a.seconds<=b.seconds?a:b);return {list,first,latest,previous,best,total:improvement(first.seconds,latest.seconds)};}
 export function warnings(record,records){const group=records.filter(r=>sameGroup(r,record)&&r.id!==record.id);const messages=[];if(group.some(r=>duplicate(r,record)))messages.push(DUPLICATE_WARNING);if(group.length>=3){const values=group.map(r=>r.seconds).sort((a,b)=>a-b),median=values[Math.floor(values.length/2)];if(record.seconds>median*2||record.seconds<median/2)messages.push(`這筆 ${record.seconds} 秒明顯偏離平常約 ${median} 秒，請確認小數點與測試條件。`);}return messages;}
 export const DUPLICATE_WARNING='這筆資料可能已經存在，仍然新增嗎？';
 // 貼上預覽的重複比對：每列回傳與既有紀錄（同小孩、日期、距離、秒數）或本次貼上較前面列相同的資訊；無重複回傳 null
@@ -48,22 +65,25 @@ export function pasteImportPlan(items,dupInfo){
 }
 export function duplicateGroups(records,{childId}={}){
  const buckets=new Map();
- for(const r of records){if(childId&&r.childId!==childId)continue;const key=[r.childId,r.date,r.distance,r.seconds].join('\u0000');const list=buckets.get(key)||[];list.push(r);buckets.set(key,list);}
- return [...buckets.values()].filter(list=>list.length>1).map(list=>chronological(list)).sort((a,b)=>a[0].date.localeCompare(b[0].date)||a[0].distance-b[0].distance||a[0].seconds-b[0].seconds);
+ for(const r of records){if(childId&&r.childId!==childId)continue;const key=[r.childId,r.date,eventKey(r),r.seconds].join('\u0000');const list=buckets.get(key)||[];list.push(r);buckets.set(key,list);}
+ return [...buckets.values()].filter(list=>list.length>1).map(list=>chronological(list)).sort((a,b)=>a[0].date.localeCompare(b[0].date)||a[0].distance-b[0].distance||eventKey(a[0]).localeCompare(eventKey(b[0]))||a[0].seconds-b[0].seconds);
 }
-export function recordsInRange(records,{childId,distance,start='',end='' }={}){
- return chronological(records.filter(r=>(!childId||r.childId===childId)&&(distance===undefined||distance===null||r.distance===distance)&&(!start||r.date>=start)&&(!end||r.date<=end)));
+export function recordsInRange(records,{childId,distance,event,sport,start='',end='' }={}){
+ return chronological(records.filter(r=>(!childId||r.childId===childId)&&(event?matchEvent(r,event):(distance===undefined||distance===null||r.distance===distance))&&(!sport||sportOf(r)===sport)&&(!start||r.date>=start)&&(!end||r.date<=end)));
 }
-export function dailyStatistics(records,date,{childId}={}){
- const list=recordsInRange(records,{childId,start:date,end:date});
- const byDistance=[...new Set(list.map(r=>r.distance))].sort((a,b)=>a-b).map(distance=>{
-  const group=list.filter(r=>r.distance===distance),speeds=group.map(r=>speed(r).ms),seconds=group.map(r=>r.seconds);
-  return {distance,records:group,count:group.length,averageSeconds:seconds.reduce((a,b)=>a+b,0)/group.length,bestSeconds:Math.min(...seconds),slowestSeconds:Math.max(...seconds),averageSpeed:speeds.reduce((a,b)=>a+b,0)/group.length};
+const EVENT_ORDER=r=>[sportOf(r)==='run'?0:1,{'':0,flat:1,slope:2}[terrainOf(r)],r.distance];
+const compareEvent=(a,b)=>{const x=EVENT_ORDER(a),y=EVENT_ORDER(b);return x[0]-y[0]||x[1]-y[1]||x[2]-y[2];};
+export function dailyStatistics(records,date,{childId,sport}={}){
+ const list=recordsInRange(records,{childId,sport,start:date,end:date});
+ const firsts=new Map();for(const r of list)if(!firsts.has(eventKey(r)))firsts.set(eventKey(r),r);
+ const byDistance=[...firsts.values()].sort(compareEvent).map(first=>{
+  const distance=first.distance,event=normalizeEvent(first),group=list.filter(r=>eventKey(r)===eventKey(first)),speeds=group.map(r=>speed(r).ms),seconds=group.map(r=>r.seconds);
+  return {distance,event,label:eventLabel(event,{full:true}),records:group,count:group.length,averageSeconds:seconds.reduce((a,b)=>a+b,0)/group.length,bestSeconds:Math.min(...seconds),slowestSeconds:Math.max(...seconds),averageSpeed:speeds.reduce((a,b)=>a+b,0)/group.length};
  });
  return {date,records:list,count:list.length,totalDistance:list.reduce((sum,r)=>sum+r.distance,0),totalSeconds:list.reduce((sum,r)=>sum+r.seconds,0),byDistance};
 }
-export function chartSeries(records,{childId,distance,start='',end='',metric='seconds'}={}){
- const list=recordsInRange(records,{childId,distance,start,end});
+export function chartSeries(records,{childId,distance,event,start='',end='',metric='seconds'}={}){
+ const list=recordsInRange(records,{childId,distance,event,start,end});
  const individual=Boolean(start&&end&&start===end);
  if(individual)return list.map((r,index)=>({date:r.date,label:`第 ${index+1} 次`,value:metric==='seconds'?r.seconds:metric==='kmh'?speed(r).kmh:speed(r).ms,count:1,bestSeconds:r.seconds,record:r,individual:true}));
  const days=new Map();
@@ -74,7 +94,7 @@ export function chartSeries(records,{childId,distance,start='',end='',metric='se
   return {date,label:date,value:metric==='seconds'?averageSeconds:metric==='kmh'?averageSpeed*3.6:averageSpeed,count:group.length,bestSeconds:Math.min(...group.map(r=>r.seconds)),records:group,individual:false};
  });
 }
-export function csv(records){const cell=v=>{let s=String(v??'');if(/^[=+\-@\t\r]/.test(s))s="'"+s;return '"'+s.replaceAll('"','""')+'"';};return '\uFEFF'+[['日期','距離公尺','秒數','速度m/s','時速km/h','備註'],...chronological(records).map(r=>[r.date,r.distance,r.seconds,speed(r).ms.toFixed(2),speed(r).kmh.toFixed(2),r.note])].map(row=>row.map(cell).join(',')).join('\r\n');}
+export function csv(records){const cell=v=>{let s=String(v??'');if(/^[=+\-@\t\r]/.test(s))s="'"+s;return '"'+s.replaceAll('"','""')+'"';};return '\uFEFF'+[['日期','距離公尺','秒數','速度m/s','時速km/h','備註','運動項目','地形'],...chronological(records).map(r=>[r.date,r.distance,r.seconds,speed(r).ms.toFixed(2),speed(r).kmh.toFixed(2),r.note,SPORTS[sportOf(r)].label,TERRAINS[terrainOf(r)]||''])].map(row=>row.map(cell).join(',')).join('\r\n');}
 export function validateBackup(data){if(data?.version!==1||!Array.isArray(data.children)||!Array.isArray(data.records))throw Error('不是支援的版本 1 備份檔');const children=new Set();for(const c of data.children){if(typeof c.id!=='string'||!c.id||children.has(c.id)||typeof c.name!=='string'||!c.name.trim()||(c.birthday!==null&&!validDate(c.birthday)))throw Error('小孩資料無效');children.add(c.id);}const ids=new Set();for(const r of data.records){validate(r);if(!children.has(r.childId)||typeof r.id!=='string'||!r.id||ids.has(r.id)||!Number.isFinite(Date.parse(r.createdAt))||!Number.isFinite(Date.parse(r.updatedAt)))throw Error('紀錄 ID、時間或小孩關聯無效');for(const [field,allowed] of Object.entries({startType:['','standing','flying','free'],surface:['','indoor','track','asphalt','grass'],timingMethod:['','manual','video','electronic']})){if(!allowed.includes(r[field]??''))throw Error('測試條件無效');}ids.add(r.id);}return data;}
 
 export const LOCAL_OWNER='local-only';
@@ -214,7 +234,7 @@ export function clockCooldownRemaining(lastClockWriteAt,now,interval=BACKUP_CLOC
 }
 
 export function portableChild(c){return {id:c.id,name:c.name,birthday:c.birthday??null};}
-export function portableRecord(r){return {id:r.id,childId:r.childId,date:r.date,distance:r.distance,seconds:r.seconds,note:r.note||'',startType:r.startType||'',surface:r.surface||'',timingMethod:r.timingMethod||'',createdAt:r.createdAt,updatedAt:r.updatedAt};}
+export function portableRecord(r){return {id:r.id,childId:r.childId,date:r.date,distance:r.distance,seconds:r.seconds,note:r.note||'',startType:r.startType||'',surface:r.surface||'',timingMethod:r.timingMethod||'',...(sportOf(r)==='balance'?{sport:'balance',terrain:terrainOf(r)}:{}),createdAt:r.createdAt,updatedAt:r.updatedAt};}
 export function portableSettings(settings,uid){
  const reverse=settings.find(s=>s.id===`reverse:${uid}`)??(uid===LOCAL_OWNER?settings.find(s=>s.id==='reverse'):null);
  return {reverse:reverse?.value!==false};

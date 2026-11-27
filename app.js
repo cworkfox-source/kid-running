@@ -6,6 +6,7 @@ import {createFirestoreCloud} from './cloud.js';
 import {createBackupService,describeBackupStatus} from './backup.js';
 import {restoreVersion,restorePreview,queryRestorableVersions,restoreListCopy} from './restore.js';
 import {exportFile,exportOutcomeMessage,INERT_DOWNLOAD_HINT} from './export.js';
+globalThis.__kidRunningStarted=true;try{sessionStorage.removeItem('kid-running-boot-repair');}catch{}
 const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const icons={home:'⌂',records:'☷',analysis:'↗',settings:'⚙'};
 let records=[],children=[],settings=[],page='home',distance=30,sport='run',terrain='flat',filter='all',preview=[],backup=null,editing=null,busy=false,pasteDraft='',duplicateScanOpen=false;

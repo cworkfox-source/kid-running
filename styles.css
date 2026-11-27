@@ -33,3 +33,4 @@
 .event-presets{display:grid;gap:8px;margin:17px 0 23px}.event-presets .chips{margin:0}.preset-row{align-items:center}.chip.terrain{min-width:58px;font-weight:650;background:#fff}.chip.terrain.selected{background:#eaf4ee}
 .event-tag{display:inline-block;font-size:11px;font-weight:650;letter-spacing:0;background:#eef4f9;color:#3f6a8a;border-radius:5px;padding:3px 6px;margin-right:6px;vertical-align:middle}
 .preview-row .preview-event{grid-column:1/-1}.preview-row select{width:100%;padding:5px;font-size:13px;margin-top:5px}
+.boot-help{max-width:520px;margin:48px auto}.boot-help h1{font-size:22px}

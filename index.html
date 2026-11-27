@@ -1,1 +1,33 @@
-<!doctype html><html lang="zh-Hant"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#f7f8fa"><meta name="description" content="快速記錄小孩跑步成績，看見每一次進步。資料儲存在你的裝置。"><title>小步快跑 · 成績紀錄</title><link rel="stylesheet" href="./styles.css"></head><body><div id="app"><p class="loading">正在準備跑道…</p></div><div id="toast" role="status" aria-live="polite"></div><script type="module" src="./app.js"></script></body></html>
+<!doctype html><html lang="zh-Hant"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#f7f8fa"><meta name="description" content="快速記錄小孩跑步成績，看見每一次進步。資料儲存在你的裝置。"><title>小步快跑 · 成績紀錄</title><link rel="stylesheet" href="./styles.css"></head><body><div id="app"><p class="loading">正在準備跑道…</p></div><div id="toast" role="status" aria-live="polite"></div><script>
+// 開機保護：主程式模組若因新舊檔案混用而載入失敗（畫面停在「正在準備跑道」），清掉離線快取並重抓程式檔後重新載入一次。
+// 只清程式快取，不碰 IndexedDB 裡的成績資料。
+(function(){
+ var FILES=['./','./index.html','./styles.css','./app.js','./core.js','./db.js','./auth.js','./backup.js','./restore.js','./export.js','./firebase.js','./firebase-config.js','./cloud.js','./sw.js'];
+ var KEY='kid-running-boot-repair';
+ function started(){return !!window.__kidRunningStarted;}
+ function repair(){
+  var tasks=[];
+  if(navigator.serviceWorker&&navigator.serviceWorker.getRegistrations)tasks.push(navigator.serviceWorker.getRegistrations().then(function(rs){return Promise.all(rs.map(function(r){return r.unregister();}));}));
+  if(window.caches)tasks.push(caches.keys().then(function(ks){return Promise.all(ks.filter(function(k){return k.indexOf('kid-running-')===0;}).map(function(k){return caches.delete(k);}));}));
+  return Promise.all(tasks).catch(function(){}).then(function(){return Promise.all(FILES.map(function(f){return fetch(f,{cache:'reload'}).catch(function(){});}));}).then(function(){location.reload();});
+ }
+ function showHelp(){
+  if(started())return;
+  var app=document.getElementById('app');if(!app)return;
+  app.innerHTML='<main class="card boot-help"><h1>程式還沒載入完成</h1><p>可能是網路較慢，或手機還留著舊版程式。成績資料存在這台裝置，不會因為更新程式而被刪除。</p><button class="primary" type="button" id="boot-repair">更新程式並重新載入</button></main>';
+  document.getElementById('boot-repair').onclick=function(){this.disabled=true;this.textContent='更新中…';repair();};
+ }
+ function autoRepair(){
+  if(started())return;
+  var tried=false;try{tried=sessionStorage.getItem(KEY)==='1';sessionStorage.setItem(KEY,'1');}catch(e){}
+  if(tried){showHelp();return;}
+  repair();
+ }
+ window.addEventListener('error',function(e){
+  if(started())return;
+  var msg=String(e&&e.message||'');
+  if(/export named|does not provide|import|SyntaxError|module/i.test(msg))autoRepair();
+ },true);
+ setTimeout(showHelp,10000);
+})();
+</script><script type="module" src="./app.js"></script></body></html>

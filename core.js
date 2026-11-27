@@ -3,23 +3,23 @@ export function validDate(s){if(!/^\d{4}-\d{2}-\d{2}$/.test(s))return false;cons
 // 運動項目：跑步（預設，舊資料沒有 sport 欄位）與滑步車（分平地／山坡）
 export const SPORTS={run:{label:'跑步',icon:'🏃'},balance:{label:'滑步車',icon:'🚲'}};
 export const TERRAINS={flat:'平地',slope:'山坡'};
-export const RUN_PRESETS=[10,20,30,40,50,60,100];
-export const BALANCE_PRESETS={flat:[10,20,30,40,50],slope:[10,20,30,40,50]};
+// 跑步與滑步車都分平地／山坡；舊紀錄沒有 terrain 欄位一律視為平地
+export const EVENT_PRESETS={run:{flat:[10,20,30,40,50],slope:[10,20,30,40,50]},balance:{flat:[10,20,30,40,50],slope:[10,20,30,40,50]}};
 export const sportOf=r=>r?.sport==='balance'?'balance':'run';
-export const terrainOf=r=>sportOf(r)==='balance'?(r.terrain==='slope'?'slope':'flat'):'';
-export function normalizeEvent(e){if(typeof e==='number')return {sport:'run',terrain:'',distance:e};const sport=sportOf(e);return {sport,terrain:terrainOf(e),distance:Number(e?.distance)};}
+export const terrainOf=r=>r?.terrain==='slope'?'slope':'flat';
+export function normalizeEvent(e){if(typeof e==='number')return {sport:'run',terrain:'flat',distance:e};const sport=sportOf(e);return {sport,terrain:terrainOf(e),distance:Number(e?.distance)};}
 export const eventKey=r=>`${sportOf(r)}:${terrainOf(r)}:${r.distance}`;
 export const matchEvent=(r,e)=>{const n=normalizeEvent(e);return sportOf(r)===n.sport&&terrainOf(r)===n.terrain&&r.distance===n.distance;};
 // 短標籤（已在該運動的畫面內）：跑步「30 公尺」、滑步車「平地 10 公尺」；完整標籤加上運動名稱
-export function eventLabel(e,{full=false}={}){const n=normalizeEvent(e);if(n.sport==='run')return `${full?'跑步 ':''}${n.distance} 公尺`;return `${full?'滑步車 ':''}${TERRAINS[n.terrain]} ${n.distance} 公尺`;}
+export function eventLabel(e,{full=false}={}){const n=normalizeEvent(e);return `${full?`${SPORTS[n.sport].label} `:''}${TERRAINS[n.terrain]} ${n.distance} 公尺`;}
 export function validate(r){if(!validDate(r.date))throw Error('請輸入有效日期');if(typeof r.distance!=='number'||!Number.isFinite(r.distance)||r.distance<=0)throw Error('距離必須大於 0');if(typeof r.seconds!=='number'||!Number.isFinite(r.seconds)||r.seconds<=0)throw Error('秒數必須大於 0');if(typeof r.note!=='string')throw Error('備註格式不正確');if(!['',undefined,'run','balance'].includes(r.sport))throw Error('運動項目無效');if(!['',undefined,'flat','slope'].includes(r.terrain))throw Error('地形無效');return r;}
 export function parseLine(source,now=today(),defaults={}){
  let text=source.normalize('NFKC').trim();let date=now;
- // 項目關鍵字：滑步車／平地／山坡 → 滑步車；明寫「跑步」→ 跑步；都沒有就用目前選擇的運動
+ // 運動關鍵字：滑步車 → 滑步車、跑步 → 跑步，都沒有就用目前選擇的運動；地形關鍵字：山坡／平地，沒寫用目前選擇的地形
  const kwBalance=/滑步|平衡車|balance/i.test(text),kwSlope=/坡/.test(text),kwFlat=/平地|平路/.test(text),kwRun=/跑步/.test(text);
  let sport=defaults.sport==='balance'?'balance':'run';
- if(kwBalance||kwSlope||kwFlat)sport='balance';else if(kwRun)sport='run';
- const terrain=sport==='balance'?(kwSlope?'slope':kwFlat?'flat':defaults.terrain==='slope'?'slope':'flat'):'';
+ if(kwBalance)sport='balance';else if(kwRun)sport='run';
+ const terrain=kwSlope?'slope':kwFlat?'flat':defaults.terrain==='slope'?'slope':'flat';
  const dm=text.match(/(?<!\d)(?:(\d{4})[/-])?(\d{1,2})[/-](\d{1,2})(?!\d)/);
  if(dm){date=`${dm[1]||now.slice(0,4)}-${dm[2].padStart(2,'0')}-${dm[3].padStart(2,'0')}`;text=text.replace(dm[0],' ');}
  if(/[-−]\s*\d/.test(text))throw Error('不接受負數');
@@ -234,7 +234,7 @@ export function clockCooldownRemaining(lastClockWriteAt,now,interval=BACKUP_CLOC
 }
 
 export function portableChild(c){return {id:c.id,name:c.name,birthday:c.birthday??null};}
-export function portableRecord(r){return {id:r.id,childId:r.childId,date:r.date,distance:r.distance,seconds:r.seconds,note:r.note||'',startType:r.startType||'',surface:r.surface||'',timingMethod:r.timingMethod||'',...(sportOf(r)==='balance'?{sport:'balance',terrain:terrainOf(r)}:{}),createdAt:r.createdAt,updatedAt:r.updatedAt};}
+export function portableRecord(r){return {id:r.id,childId:r.childId,date:r.date,distance:r.distance,seconds:r.seconds,note:r.note||'',startType:r.startType||'',surface:r.surface||'',timingMethod:r.timingMethod||'',...(sportOf(r)==='balance'?{sport:'balance'}:{}),...(sportOf(r)==='balance'||terrainOf(r)==='slope'?{terrain:terrainOf(r)}:{}),createdAt:r.createdAt,updatedAt:r.updatedAt};}
 export function portableSettings(settings,uid){
  const reverse=settings.find(s=>s.id===`reverse:${uid}`)??(uid===LOCAL_OWNER?settings.find(s=>s.id==='reverse'):null);
  return {reverse:reverse?.value!==false};
